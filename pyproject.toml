@@ -4,4 +4,10 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "networkx>=3.4.2",
+    "openai>=1.109.1",
+    "pydantic>=2.10.4,<2.12",
+    "pydantic-settings>=2.6.1,<2.12",
+    "semantic-kernel>=1.16.0",
+]
