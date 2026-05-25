@@ -10,7 +10,9 @@ dependencies = [
     "openai>=1.109.1",
     "pydantic>=2.10.4,<2.12",
     "pydantic-settings>=2.6.1,<2.12",
+    "requests>=2.34.2",
     "semantic-kernel>=1.16.0",
+    "streamlit>=1.57.0",
     "tenacity>=9.1.4",
     "uvicorn>=0.47.0",
 ]
