@@ -1,6 +1,7 @@
 import os
 import hashlib
 import networkx as nx
+from pathlib import Path
 from utils.logger import get_logger
 
 logger = get_logger()
@@ -46,35 +47,70 @@ class Librarian:
             logger.error(f"Error hashing file {absolute_path}: {e}")
             return ""
 
-    def scan_repository(self, target_repo_path: str) -> dict:
+    def scan_repository(self, target_repo_path: str, valid_files: list[Path] = None) -> dict:
         """
         Walks the codebase, filters out non-relevant files, and classifies 
         files into 'modified' (needs parsing) or 'unchanged' states.
         """
-        ignored_dirs = {'.git', 'venv', '__pycache__', '.localgraph', 'data', 'llmhost'}
+        target_dir = Path(target_repo_path)
         file_manifest = {}
         
-        for root, dirs, files in os.walk(target_repo_path):
-            # Prune directory tree in-place to avoid wandering into deep data/env dependencies
-            dirs[:] = [d for d in dirs if d not in ignored_dirs]
+        # If the pipeline handed us a safe list, use it. Otherwise, scan everything.
+        files_to_scan = valid_files if valid_files is not None else [f for f in target_dir.rglob("*") if f.is_file()]
+        
+        for file_path in files_to_scan:
+            # We only want to parse Python files (preserving your original logic)
+            if file_path.suffix != ".py":
+                continue
+                
+            # Convert Path objects to strings for compatibility with the rest of your app
+            full_path = str(file_path.absolute())
+            relative_path = str(file_path.relative_to(target_dir))
             
-            for file in files:
-                if file.endswith(".py"):
-                    full_path = os.path.join(root, file)
-                    relative_path = os.path.relpath(full_path, target_repo_path)
-                    
-                    current_hash = self.calculate_file_hash(full_path)
-                    
-                    # Read the historical hash directly out of the graph's file nodes if it exists
-                    file_node_id = f"file::{relative_path}"
-                    old_hash = self.graph.nodes.get(file_node_id, {}).get("hash", "")
-                    
-                    status = "modified" if current_hash != old_hash else "unchanged"
-                    
-                    file_manifest[relative_path] = {
-                        "absolute_path": full_path,
-                        "hash": current_hash,
-                        "status": status
-                    }
-                    
+            current_hash = self.calculate_file_hash(full_path)
+            
+            # Read the historical hash directly out of the graph's file nodes if it exists
+            file_node_id = f"file::{relative_path}"
+            old_hash = self.graph.nodes.get(file_node_id, {}).get("hash", "")
+            
+            status = "modified" if current_hash != old_hash else "unchanged"
+            
+            file_manifest[relative_path] = {
+                "absolute_path": full_path,
+                "hash": current_hash,
+                "status": status
+            }
+                
         return file_manifest
+    # def scan_repository(self, target_repo_path: str, valid_files: list[Path] = None) -> dict:
+    #     """
+    #     Walks the codebase, filters out non-relevant files, and classifies 
+    #     files into 'modified' (needs parsing) or 'unchanged' states.
+    #     """
+    #     ignored_dirs = {'.git', 'venv', '__pycache__', '.localgraph', 'data', 'llmhost'}
+    #     file_manifest = {}
+        
+    #     for root, dirs, files in os.walk(target_repo_path):
+    #         # Prune directory tree in-place to avoid wandering into deep data/env dependencies
+    #         dirs[:] = [d for d in dirs if d not in ignored_dirs]
+            
+    #         for file in files:
+    #             if file.endswith(".py"):
+    #                 full_path = os.path.join(root, file)
+    #                 relative_path = os.path.relpath(full_path, target_repo_path)
+                    
+    #                 current_hash = self.calculate_file_hash(full_path)
+                    
+    #                 # Read the historical hash directly out of the graph's file nodes if it exists
+    #                 file_node_id = f"file::{relative_path}"
+    #                 old_hash = self.graph.nodes.get(file_node_id, {}).get("hash", "")
+                    
+    #                 status = "modified" if current_hash != old_hash else "unchanged"
+                    
+    #                 file_manifest[relative_path] = {
+    #                     "absolute_path": full_path,
+    #                     "hash": current_hash,
+    #                     "status": status
+    #                 }
+                    
+    #     return file_manifest

@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field
+from typing import Optional
 
 class QueryRequest(BaseModel):
     repo_name: str = Field(
@@ -10,6 +11,10 @@ class QueryRequest(BaseModel):
         ..., 
         description="A natural language question regarding the codebase architecture, logic, or data flow.",
         examples=["If I pass a raw image array into the system, which class handles the normalization, and what math does it do?"]
+    )
+    max_tokens: Optional[int] = Field(
+        default=None, 
+        description="The maximum number of tokens the LLM is allowed to generate. If null, uses the model's maximum limit."
     )
 
 class QueryResponse(BaseModel):

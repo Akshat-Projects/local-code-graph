@@ -1,6 +1,8 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from models.request import IngestRequest, JobStatusResponse
 from typing import Any, Dict
+from utils.helper import get_ignore_spec
+from pathlib import Path
 
 from core.librarian import Librarian
 from core.ast_parser import CodebaseASTParser
@@ -16,18 +18,33 @@ router = APIRouter(prefix="/api/v1/ingest", tags=["Ingestion"])
 # Stores the status of background ingestion tasks
 JOB_STORE: Dict[str, Dict[str, Any]] = {}
 
+
 async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
     """The background worker that updates the global JOB_STORE dictionary."""
-    JOB_STORE[job_id]["status"] = "processing"
+    JOB_STORE[job_id] = {"status": "processing", "details": {}}
     logger.info(f"Job {job_id} started processing for repo: {repo_name}")
+    
+    target_dir = Path(target_path)
+    ignore_spec = get_ignore_spec(target_dir)
+    
+    # 1. Build the filtered list
+    valid_files = []
+    for file_path in target_dir.rglob("*"):
+        if not file_path.is_file():
+            continue
+        relative_path = str(file_path.relative_to(target_dir))
+        if ignore_spec.match_file(relative_path):
+            continue
+        valid_files.append(file_path)
     
     try:
         # Phase 1: Static AST Parsing
         librarian = Librarian(workspace_root=".", repo_name=repo_name)
-        manifest = librarian.scan_repository(target_path)
+        
+        # --- CONNECTION: Pass the filtered list instead of just the path ---
+        manifest = librarian.scan_repository(target_path, valid_files=valid_files)
         
         parser = CodebaseASTParser(librarian.graph)
-        
         modified_count = 0
         for rel_path, file_meta in manifest.items():
             if file_meta["status"] == "modified":
@@ -37,17 +54,87 @@ async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
         if modified_count > 0:
             librarian.save_graph()
             
+        # --- UI CONNECTION: The Streamlit Progress Callback ---
+        def update_ui_progress(current: int, total: int, status_message: str):
+            JOB_STORE[job_id]["details"] = {
+                "current": current,
+                "total": total,
+                "progress_percent": int((current / total) * 100) if total > 0 else 0,
+                "current_file": status_message
+            }
+            
         # Phase 2: LLM Semantic Analysis
         analyst = GraphAnalyst(librarian=librarian, target_repo_path=target_path)
-        await analyst.analyze_and_update()
+        # Pass the callback so the backend can talk to the Streamlit UI!
+        await analyst.analyze_and_update(progress_callback=update_ui_progress)
         
         # Mark Job as Successful
         JOB_STORE[job_id] = {
             "status": "completed",
             "message": "Graph enriched and saved successfully.",
-            "details": {"files_modified": modified_count}
+            "details": {"files_modified": modified_count, "progress_percent": 100}
         }
         logger.info(f"Job {job_id} completed successfully.")
+        
+    # except Exception as e:
+    #     logger.error(f"Ingestion job {job_id} failed: {e}", exc_info=True)
+    #     JOB_STORE[job_id] = {
+    #         "status": "failed",
+    #         "message": str(e)
+    #     }
+# async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
+#     """The background worker that updates the global JOB_STORE dictionary."""
+#     JOB_STORE[job_id]["status"] = "processing"
+#     logger.info(f"Job {job_id} started processing for repo: {repo_name}")
+    
+#     target_dir = Path(target_path)
+#     ignore_spec = get_ignore_spec(target_dir)
+    
+#     valid_files = []
+    
+#     for file_path in target_dir.rglob("*"):
+#         # Skip directories, we only want to read files
+#         if not file_path.is_file():
+#             continue
+            
+#         # Get the path relative to the repo root (e.g., "src/main.py")
+#         relative_path = str(file_path.relative_to(target_dir))
+        
+#         # Check if this file matches any rule in the .gitignore
+#         if ignore_spec.match_file(relative_path):
+#             # logger.debug(f"Skipping ignored file: {relative_path}")
+#             continue
+            
+#         # If it survived the filter, add it to the processing queue
+#         valid_files.append(file_path)
+    
+#     try:
+#         # Phase 1: Static AST Parsing
+#         librarian = Librarian(workspace_root=".", repo_name=repo_name)
+#         manifest = librarian.scan_repository(target_path)
+        
+#         parser = CodebaseASTParser(librarian.graph)
+        
+#         modified_count = 0
+#         for rel_path, file_meta in manifest.items():
+#             if file_meta["status"] == "modified":
+#                 parser.parse_file(file_meta["absolute_path"], rel_path, file_meta["hash"])
+#                 modified_count += 1
+                
+#         if modified_count > 0:
+#             librarian.save_graph()
+            
+#         # Phase 2: LLM Semantic Analysis
+#         analyst = GraphAnalyst(librarian=librarian, target_repo_path=target_path)
+#         await analyst.analyze_and_update()
+        
+#         # Mark Job as Successful
+#         JOB_STORE[job_id] = {
+#             "status": "completed",
+#             "message": "Graph enriched and saved successfully.",
+#             "details": {"files_modified": modified_count}
+#         }
+#         logger.info(f"Job {job_id} completed successfully.")
         
     except Exception as e:
         # Mark Job as Failed and capture the exact error!
@@ -100,74 +187,11 @@ async def get_job_status(job_id: str):
         details=job_data.get("details")
     )
     
-# async def run_ingestion_pipeline(repo_name: str, target_path: str):
-#     """Background task handling static AST parsing and LLM semantic extraction."""
-#     logger.info(f"Starting Background Ingestion for repo: {repo_name}")
-#     try:
-#         # Phase 1: Static AST Parsing
-#         librarian = Librarian(workspace_root=".", repo_name=repo_name)
-#         manifest = librarian.scan_repository(target_path)
-        
-#         parser = CodebaseASTParser(librarian.graph)
-        
-#         modified_count = 0
-#         for rel_path, file_meta in manifest.items():
-#             if file_meta["status"] == "modified":
-#                 parser.parse_file(file_meta["absolute_path"], rel_path, file_meta["hash"])
-#                 modified_count += 1
-                
-#         if modified_count > 0:
-#             librarian.save_graph()
-#             logger.info(f"Phase 1 complete. Parsed {modified_count} modified files.")
-            
-#         # Phase 2: LLM Semantic Analysis
-#         analyst = GraphAnalyst(librarian=librarian, target_repo_path=target_path)
-#         await analyst.analyze_and_update()
-        
-#         logger.info(f"Completed Background Ingestion successfully for: {repo_name}")
-        
-#     except Exception as e:
-#         logger.error(f"Ingestion failed for {repo_name}: {e}", exc_info=True)
-
     
-# @router.post("", status_code=200)
-# async def trigger_ingestion(request: IngestRequest):
-#     """
-#     Triggers the code graph parsing and LLM semantic mapping synchronously.
-#     """
-#     logger.info(f"Starting Ingestion for repo: {request.repo_name}")
-#     try:
-#         # Phase 1: Static AST Parsing
-#         librarian = Librarian(workspace_root=".", repo_name=request.repo_name)
-#         manifest = librarian.scan_repository(request.target_path)
-        
-#         parser = CodebaseASTParser(librarian.graph)
-        
-#         modified_count = 0
-#         for rel_path, file_meta in manifest.items():
-#             if file_meta["status"] == "modified":
-#                 parser.parse_file(file_meta["absolute_path"], rel_path, file_meta["hash"])
-#                 modified_count += 1
-                
-#         if modified_count > 0:
-#             librarian.save_graph()
-#             logger.info(f"Phase 1 complete. Parsed {modified_count} modified files.")
-            
-#         # Phase 2: LLM Semantic Analysis
-#         analyst = GraphAnalyst(librarian=librarian, target_repo_path=request.target_path)
-#         await analyst.analyze_and_update()
-        
-#         logger.info(f"Completed Ingestion successfully for: {request.repo_name}")
-        
-#         # Return strict 200 OK upon actual completion
-#         return {
-#             "message": "Ingestion completed successfully.",
-#             "repo_name": request.repo_name,
-#             "target_path": request.target_path,
-#             "files_modified": modified_count
-#         }
-        
-#     except Exception as e:
-#         logger.error(f"Ingestion failed for {request.repo_name}: {e}", exc_info=True)
-#         # Raise a 500 error so the swagger UI / frontend knows it broke
-#         raise HTTPException(status_code=500, detail=f"Ingestion pipeline failed: {str(e)}")
+def update_progress(current: int, total: int, status_message: str, job_id: str):
+    JOB_STORE[job_id]["details"] = {
+        "current": current,
+        "total": total,
+        "progress_percent": int((current / total) * 100) if total > 0 else 0,
+        "current_file": status_message
+    }

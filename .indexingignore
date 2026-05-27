@@ -1,0 +1,17 @@
+# .indexingignore
+
+# Massive minified frontend bundles
+dist/
+build/
+*.min.js
+*.bundle.js
+
+# Data dumps and static assets that waste LLM tokens
+*.csv
+*.json
+*.sql
+public/images/
+
+# Auto-generated documentation
+docs/build/
+site/

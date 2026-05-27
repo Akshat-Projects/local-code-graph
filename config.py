@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str  # Since we are using openai module, we need a dummy key here
     AI_MODEL_ID: str
     APP_NAME: str
+    BACKEND_ENDPOINT: str
 
     model_config = SettingsConfigDict(
         env_file=".env",
