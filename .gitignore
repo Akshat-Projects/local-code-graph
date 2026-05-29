@@ -2,6 +2,7 @@
 logs
 .agents
 .localgraph
+graphify-out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

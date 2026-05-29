@@ -7,6 +7,8 @@ from pathlib import Path
 from core.librarian import Librarian
 from core.ast_parser import CodebaseASTParser
 from intelligence_layer.analyst import GraphAnalyst
+from utils.helper import validate_ingestion_path
+from utils.constants import SecurityConstraints
 from utils.logger import get_logger
 import uuid
 
@@ -23,12 +25,35 @@ async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
     """The background worker that updates the global JOB_STORE dictionary."""
     JOB_STORE[job_id] = {"status": "processing", "details": {}}
     logger.info(f"Job {job_id} started processing for repo: {repo_name}")
-    
+
     target_dir = Path(target_path)
     ignore_spec = get_ignore_spec(target_dir)
     
     # 1. Build the filtered list
     valid_files = []
+    
+    for file_path in target_dir.rglob("*"):
+
+        if not file_path.is_file():
+            continue
+
+        relative_path = str(
+            file_path.relative_to(target_dir)
+        )
+
+        if ignore_spec.match_file(relative_path):
+            continue
+
+        valid_files.append(file_path)
+
+        if len(valid_files) > SecurityConstraints.MAX_FILES:
+            raise ValueError(
+                f"Repository exceeds "
+                f"maximum allowed file count "
+                f"({SecurityConstraints.MAX_FILES})"
+            )
+    
+
     for file_path in target_dir.rglob("*"):
         if not file_path.is_file():
             continue
@@ -76,65 +101,6 @@ async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
         }
         logger.info(f"Job {job_id} completed successfully.")
         
-    # except Exception as e:
-    #     logger.error(f"Ingestion job {job_id} failed: {e}", exc_info=True)
-    #     JOB_STORE[job_id] = {
-    #         "status": "failed",
-    #         "message": str(e)
-    #     }
-# async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
-#     """The background worker that updates the global JOB_STORE dictionary."""
-#     JOB_STORE[job_id]["status"] = "processing"
-#     logger.info(f"Job {job_id} started processing for repo: {repo_name}")
-    
-#     target_dir = Path(target_path)
-#     ignore_spec = get_ignore_spec(target_dir)
-    
-#     valid_files = []
-    
-#     for file_path in target_dir.rglob("*"):
-#         # Skip directories, we only want to read files
-#         if not file_path.is_file():
-#             continue
-            
-#         # Get the path relative to the repo root (e.g., "src/main.py")
-#         relative_path = str(file_path.relative_to(target_dir))
-        
-#         # Check if this file matches any rule in the .gitignore
-#         if ignore_spec.match_file(relative_path):
-#             # logger.debug(f"Skipping ignored file: {relative_path}")
-#             continue
-            
-#         # If it survived the filter, add it to the processing queue
-#         valid_files.append(file_path)
-    
-#     try:
-#         # Phase 1: Static AST Parsing
-#         librarian = Librarian(workspace_root=".", repo_name=repo_name)
-#         manifest = librarian.scan_repository(target_path)
-        
-#         parser = CodebaseASTParser(librarian.graph)
-        
-#         modified_count = 0
-#         for rel_path, file_meta in manifest.items():
-#             if file_meta["status"] == "modified":
-#                 parser.parse_file(file_meta["absolute_path"], rel_path, file_meta["hash"])
-#                 modified_count += 1
-                
-#         if modified_count > 0:
-#             librarian.save_graph()
-            
-#         # Phase 2: LLM Semantic Analysis
-#         analyst = GraphAnalyst(librarian=librarian, target_repo_path=target_path)
-#         await analyst.analyze_and_update()
-        
-#         # Mark Job as Successful
-#         JOB_STORE[job_id] = {
-#             "status": "completed",
-#             "message": "Graph enriched and saved successfully.",
-#             "details": {"files_modified": modified_count}
-#         }
-#         logger.info(f"Job {job_id} completed successfully.")
         
     except Exception as e:
         # Mark Job as Failed and capture the exact error!
@@ -152,6 +118,9 @@ async def trigger_ingestion(request: IngestRequest, background_tasks: Background
     Kicks off the ingestion pipeline and immediately returns a Job ID for tracking.
     """
     job_id = str(uuid.uuid4())
+    target_dir = validate_ingestion_path(
+        request.target_path
+    )
     
     # Initialize the job in our tracking dictionary
     JOB_STORE[job_id] = {"status": "pending"}
@@ -161,7 +130,7 @@ async def trigger_ingestion(request: IngestRequest, background_tasks: Background
         run_ingestion_pipeline, 
         job_id, 
         request.repo_name, 
-        request.target_path
+        str(target_dir)
     )
     
     return JobStatusResponse(

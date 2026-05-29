@@ -1,10 +1,19 @@
 from pydantic import BaseModel, Field
-from typing import Dict, Any
+from typing import Dict, Any, Annotated
 
+
+RepoName = Annotated[
+    str,
+    Field(
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        min_length=1,
+        max_length=100
+    )
+]
 
 class IngestRequest(BaseModel):
 
-    repo_name: str = Field(
+    repo_name: RepoName = Field(
         ...,
         description="Name of the repository",
         examples=["Conv2dLSTM"]

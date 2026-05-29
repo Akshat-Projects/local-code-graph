@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     AI_MODEL_ID: str
     APP_NAME: str
     BACKEND_ENDPOINT: str
+    ALLOWED_ORIGIN: str
 
     model_config = SettingsConfigDict(
         env_file=".env",

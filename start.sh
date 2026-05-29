@@ -41,19 +41,21 @@ echo "[1/3] Booting Gemma 4 (llama-server)..."
 LLM_PID=$!
 
 # Give the GPU a few seconds to load the 131k context weights into VRAM
-sleep 30 
+sleep 30
 
 # 2. Boot the FastAPI Backend
 echo "[2/3] Booting FastAPI Backend..."
 uv run main.py &
 API_PID=$!
 
-sleep 2
+sleep 7
 
 # 3. Boot the Streamlit UI
 echo "[3/3] Booting Streamlit Command Center..."
 uv run streamlit run app.py &
 UI_PID=$!
+
+sleep 3
 
 echo "============================================"
 echo "All systems operational!"

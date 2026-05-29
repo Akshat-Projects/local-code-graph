@@ -1,5 +1,6 @@
 import os
 import hashlib
+import re
 import networkx as nx
 from pathlib import Path
 from utils.logger import get_logger
@@ -12,12 +13,35 @@ class Librarian:
         Manages file discovery, change verification, and graph storage 
         for an isolated repository workspace.
         """
+        # Defend against malicious names (like ../../etc, foo/bar, foo\bar, foo;rm -rf)
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", repo_name):
+            raise ValueError("Invalid repository name")
+
+        base_storage = (
+            Path(workspace_root)
+            / ".localgraph"
+            / "storage"
+        ).resolve()
+
+        storage_dir = (base_storage / repo_name).resolve()
+        # Defend against malicious path manipulation (like ../../etc)
+        try:
+            storage_dir.relative_to(base_storage)
+        except ValueError:
+            raise ValueError(
+                "Path traversal attempt detected"
+            )
+
+        self.storage_dir = storage_dir
+
         self.repo_name = repo_name
         # Set up isolated storage layout: .localgraph/storage/[repo_name]/
-        self.storage_dir = os.path.join(workspace_root, ".localgraph", "storage", repo_name)
+        # self.storage_dir = os.path.join(workspace_root, ".localgraph", "storage", repo_name)
         os.makedirs(self.storage_dir, exist_ok=True)
         
-        self.graph_path = os.path.join(self.storage_dir, "graph.graphml")
+        # self.graph_path = os.path.join(self.storage_dir, "graph.graphml")
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.graph_path = (self.storage_dir / "graph.graphml")
         self.graph = self._load_or_create_graph()
 
     def _load_or_create_graph(self) -> nx.MultiDiGraph:

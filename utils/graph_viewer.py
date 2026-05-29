@@ -6,7 +6,7 @@ logger = get_logger()
 
 def inspect_graph():
     # 1. Resolve the path to your active graph file
-    graph_path = f"/home/akshat_ubuntu/project/local-code-graph/.localgraph/storage/Latest/graph.graphml"
+    graph_path = f".localgraph/storage/Latest/graph.graphml"
     
     logger.info(f"Loading enriched graph from: {graph_path}\n")
     
