@@ -13,10 +13,11 @@ from intelligence_layer.prompts import GRAPH_RAG_PROMPT
 logger = get_logger()
 
 class GraphQueryEngine:
-    def __init__(self, repo_name: str):
+    def __init__(self, repo_name: str, target_repo_path: str):
         self.repo_name = repo_name
         self.graph_path = f".localgraph/storage/{repo_name}/graph.graphml"
         self.kernel = LocalKernelFactory.create_kernel()
+        self.target_repo_path = target_repo_path
         
     def _get_relevant_subgraph(self, G: nx.Graph, query: str, top_k: int = 5) -> nx.Graph:
         """
@@ -57,20 +58,21 @@ class GraphQueryEngine:
             
         logger.info(f"Extracted subgraph with {len(subgraph_nodes)} nodes based on query.")
         return G.subgraph(subgraph_nodes)
-
+    
+    
     @timeit
     def _build_context_payload(self, user_query: str) -> str:
-        """Serializes the dynamically filtered NetworkX graph for the LLM."""
         try:
             G = nx.read_graphml(self.graph_path, node_type=str)
         except Exception as e:
             logger.error(f"Failed to load graph database: {e}")
             raise FileNotFoundError("Graph database not found.")
 
-        # --- RETRIEVAL PHASE ---
         filtered_G = self._get_relevant_subgraph(G, user_query)
 
         context_lines = ["# Codebase Semantic Map\n", "## Components & Logic"]
+        
+        # 1. Add the Semantic Summaries
         for node_id, data in filtered_G.nodes(data=True):
             if summary := data.get("summary", ""):
                 context_lines.append(f"- [{data.get('type', 'unknown').upper()}] {node_id}: {summary}")
@@ -79,26 +81,37 @@ class GraphQueryEngine:
         for source, target, data in filtered_G.edges(data=True):
             context_lines.append(f"- {source} explicitly {data.get('relation', 'unknown')} {target}")
 
+        # --- NEW: DYNAMIC FILE INJECTION ---
+        context_lines.append("\n## Relevant Raw Source Code")
+        
+        # Find all unique files associated with our highly relevant subgraph
+        files_to_read = set()
+        for node_id in filtered_G.nodes():
+            # Adjust this split logic depending on how you formatted your node IDs
+            # Assuming node IDs look like 'file::path/to/file.py' or 'function::path/to/file.py::func_name'
+            parts = node_id.split("::")
+            if len(parts) >= 2:
+                # The file path is usually the second element in standard AST tagging
+                file_rel_path = parts[1] 
+                if file_rel_path.endswith(".py"):
+                    files_to_read.add(file_rel_path)
+
+        import os
+        for rel_path in list(files_to_read)[:3]: # Cap at top 3 files to save GPU memory
+            full_path = os.path.join(self.target_repo_path, rel_path)
+            if os.path.exists(full_path):
+                try:
+                    with open(full_path, "r", encoding="utf-8") as f:
+                        code_content = f.read()
+                        context_lines.append(f"\n### File: {rel_path}\n```python\n{code_content}\n```")
+                except Exception as e:
+                    logger.warning(f"Could not read source file {full_path}: {e}")
+                # with open(full_path, "r", encoding="utf-8") as f:
+                #     code_content = f.read()
+                #     context_lines.append(f"\n### File: {rel_path}\n```python\n{code_content}\n```")
+
         return "\n".join(context_lines)
-    # @timeit
-    # def _build_context_payload(self) -> str:
-    #     """Serializes the NetworkX graph for the LLM."""
-    #     try:
-    #         G = nx.read_graphml(self.graph_path, node_type=str)
-    #     except Exception as e:
-    #         logger.error(f"Failed to load graph database: {e}")
-    #         raise FileNotFoundError("Graph database not found. Please run ingestion first.")
 
-    #     context_lines = ["# Codebase Semantic Map\n", "## Components & Logic"]
-    #     for node_id, data in G.nodes(data=True):
-    #         if summary := data.get("summary", ""):
-    #             context_lines.append(f"- [{data.get('type', 'unknown').upper()}] {node_id}: {summary}")
-
-    #     context_lines.append("\n## Structural Relationships")
-    #     for source, target, data in G.edges(data=True):
-    #         context_lines.append(f"- {source} explicitly {data.get('relation', 'unknown')} {target}")
-
-    #     return "\n".join(context_lines)
 
     @retry(wait=wait_exponential(multiplier=2, min=2, max=10), stop=stop_after_attempt(3), reraise=True)
     async def answer_question_stream(self, user_query: str, max_tokens: int = None):
@@ -135,6 +148,19 @@ class GraphQueryEngine:
                     
                 # 2. Dynamic Telemetry Extraction Strategy
                 try:
+                    try:
+                        delta = getattr(chunk.inner_content.choices[0], "delta", None)
+                        if delta:
+                            # Handle both Pydantic model attribute and raw dictionary
+                            reasoning = getattr(delta, "reasoning_content", None)
+                            if not reasoning and isinstance(delta, dict):
+                                reasoning = delta.get("reasoning_content")
+                                
+                            if reasoning:
+                                # Stream it to the UI under a specific "thought" type
+                                yield json.dumps({"type": "thought", "content": reasoning}) + "\n"
+                    except Exception:
+                        pass
                     metadata = getattr(chunk, 'metadata', {})
                     
                     timings = None
@@ -174,6 +200,48 @@ class GraphQueryEngine:
         except Exception as e:
             logger.error(f"Streaming inference failed: {e}", exc_info=True)
             raise e
+        
+        # @timeit
+    # def _build_context_payload(self, user_query: str) -> str:
+    #     """Serializes the dynamically filtered NetworkX graph for the LLM."""
+    #     try:
+    #         G = nx.read_graphml(self.graph_path, node_type=str)
+    #     except Exception as e:
+    #         logger.error(f"Failed to load graph database: {e}")
+    #         raise FileNotFoundError("Graph database not found.")
+
+    #     # --- RETRIEVAL PHASE ---
+    #     filtered_G = self._get_relevant_subgraph(G, user_query)
+
+    #     context_lines = ["# Codebase Semantic Map\n", "## Components & Logic"]
+    #     for node_id, data in filtered_G.nodes(data=True):
+    #         if summary := data.get("summary", ""):
+    #             context_lines.append(f"- [{data.get('type', 'unknown').upper()}] {node_id}: {summary}")
+
+    #     context_lines.append("\n## Structural Relationships")
+    #     for source, target, data in filtered_G.edges(data=True):
+    #         context_lines.append(f"- {source} explicitly {data.get('relation', 'unknown')} {target}")
+
+    #     return "\n".join(context_lines)
+    # @timeit
+    # def _build_context_payload(self) -> str:
+    #     """Serializes the NetworkX graph for the LLM."""
+    #     try:
+    #         G = nx.read_graphml(self.graph_path, node_type=str)
+    #     except Exception as e:
+    #         logger.error(f"Failed to load graph database: {e}")
+    #         raise FileNotFoundError("Graph database not found. Please run ingestion first.")
+
+    #     context_lines = ["# Codebase Semantic Map\n", "## Components & Logic"]
+    #     for node_id, data in G.nodes(data=True):
+    #         if summary := data.get("summary", ""):
+    #             context_lines.append(f"- [{data.get('type', 'unknown').upper()}] {node_id}: {summary}")
+
+    #     context_lines.append("\n## Structural Relationships")
+    #     for source, target, data in G.edges(data=True):
+    #         context_lines.append(f"- {source} explicitly {data.get('relation', 'unknown')} {target}")
+
+    #     return "\n".join(context_lines)
     # @retry(wait=wait_exponential(multiplier=2, min=2, max=10), stop=stop_after_attempt(3), reraise=True)
     # async def answer_question_stream(self, user_query: str):
     #     """

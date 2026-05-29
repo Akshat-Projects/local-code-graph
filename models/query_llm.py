@@ -16,6 +16,10 @@ class QueryRequest(BaseModel):
         default=None, 
         description="The maximum number of tokens the LLM is allowed to generate. If null, uses the model's maximum limit."
     )
+    target_path: str = Field(
+        ...,
+        description="Target code location will be provided to LLM to provide relevant results."
+    )
 
 class QueryResponse(BaseModel):
     answer: str = Field(

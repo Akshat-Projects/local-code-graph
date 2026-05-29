@@ -15,10 +15,16 @@ async def ask_codebase(request: QueryRequest):
     """
     logger.info(f"Received streaming query for repo: {request.repo_name}")
     try:
-        engine = GraphQueryEngine(repo_name=request.repo_name)
+        engine = GraphQueryEngine(
+            target_repo_path=request.target_path,
+            repo_name=request.repo_name
+            )
         
         # Grab the async generator
-        response_generator = engine.answer_question_stream(user_query=request.question, max_tokens=request.max_tokens)
+        response_generator = engine.answer_question_stream(
+            user_query=request.question, 
+            max_tokens=request.max_tokens
+            )
         
         # Stream the chunks down the HTTP connection as plain text
         return StreamingResponse(response_generator, media_type="text/plain")

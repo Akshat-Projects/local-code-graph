@@ -20,12 +20,28 @@ cleanup() {
 trap cleanup SIGINT
 
 # 1. Boot the LLM (Subshell is used so we don't lose our current directory)
+# Note: reasoning-budget is set to 2048 to avoid endless thinking loops. 
+# You can change it to -1 to give the model completely free rein.
 echo "[1/3] Booting Gemma 4 (llama-server)..."
-(cd ~/llama.cpp/build && ./bin/llama-server -m ~/llmhost/model/gemma-4-E4B-it-Q4_K_M.gguf -ngl 999 -c 131072 -fa on -ctk q4_0 -ctv q4_0 --host 0.0.0.0 --port 8080 --jinja --pooling rank) &
+(cd ~/llama.cpp/build && ./bin/llama-server \
+  -m ~/llmhost/model/gemma-4-E4B-it-Q4_K_M.gguf \
+  -ngl 999 \
+  -c 131072 \
+  -fa on \
+  -ctk q4_0 \
+  -ctv q4_0 \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --jinja \
+  --pooling rank \
+  --reasoning-budget 2048 \
+  --chat-template-kwargs '{"enable_thinking":true}') &
+
+# (cd ~/llama.cpp/build && ./bin/llama-server -m ~/llmhost/model/gemma-4-E4B-it-Q4_K_M.gguf -ngl 999 -c 131072 -fa on -ctk q4_0 -ctv q4_0 --host 0.0.0.0 --port 8080 --jinja --pooling rank) &
 LLM_PID=$!
 
 # Give the GPU a few seconds to load the 131k context weights into VRAM
-sleep 25 
+sleep 30 
 
 # 2. Boot the FastAPI Backend
 echo "[2/3] Booting FastAPI Backend..."
