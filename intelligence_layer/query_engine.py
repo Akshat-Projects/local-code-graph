@@ -1,6 +1,9 @@
+import os
+import asyncio
 import json
 import networkx as nx
 from semantic_kernel.functions import KernelArguments
+from pathlib import Path
 from tenacity import retry, wait_exponential, stop_after_attempt
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatPromptExecutionSettings
 
@@ -18,6 +21,9 @@ class GraphQueryEngine:
         self.graph_path = f".localgraph/storage/{repo_name}/graph.graphml"
         self.kernel = LocalKernelFactory.create_kernel()
         self.target_repo_path = target_repo_path
+        # Enable caching for faster query result
+        self._graph_cache = None
+        self._graph_mtime = None
         
     def _get_relevant_subgraph(self, G: nx.Graph, query: str, top_k: int = 5) -> nx.Graph:
         """
@@ -60,10 +66,28 @@ class GraphQueryEngine:
         return G.subgraph(subgraph_nodes)
     
     
+    def _load_graph(self):
+        current_mtime = os.path.getmtime(
+            self.graph_path
+        )
+        if (self._graph_cache is None or self._graph_mtime != current_mtime):
+            logger.info("Reloading graph cache...")
+            self._graph_cache = nx.read_graphml(
+                self.graph_path,
+                node_type=str
+            )
+            self._graph_mtime = current_mtime
+
+        return self._graph_cache
+    
     @timeit
-    def _build_context_payload(self, user_query: str) -> str:
+    async def _build_context_payload(self, user_query: str) -> str:
         try:
-            G = nx.read_graphml(self.graph_path, node_type=str)
+            # G = nx.read_graphml(self.graph_path, node_type=str)
+            # G = self._load_graph()
+            G = await asyncio.to_thread(
+                    self._load_graph
+                )
         except Exception as e:
             logger.error(f"Failed to load graph database: {e}")
             raise FileNotFoundError("Graph database not found.")
@@ -85,25 +109,33 @@ class GraphQueryEngine:
         context_lines.append("\n## Relevant Raw Source Code")
         
         # Find all unique files associated with our highly relevant subgraph
-        files_to_read = set()
-        for node_id in filtered_G.nodes():
-            # Adjust this split logic depending on how you formatted your node IDs
-            # Assuming node IDs look like 'file::path/to/file.py' or 'function::path/to/file.py::func_name'
-            parts = node_id.split("::")
-            if len(parts) >= 2:
-                # The file path is usually the second element in standard AST tagging
-                file_rel_path = parts[1] 
-                if file_rel_path.endswith(".py"):
-                    files_to_read.add(file_rel_path)
+        file_scores = {}
+        for _, node_data in filtered_G.nodes(data=True):
 
-        import os
-        for rel_path in list(files_to_read)[:3]: # Cap at top 3 files to save GPU memory
+            file_path = node_data.get("file_path")
+
+            if not file_path:
+                continue
+
+            file_scores[file_path] = (
+                file_scores.get(file_path, 0)
+                + 1
+            )
+
+        top_files = sorted(file_scores, key=file_scores.get, reverse=True)[:3]
+
+
+        for rel_path in top_files: # Cap at top 3 files to save GPU memory
             full_path = os.path.join(self.target_repo_path, rel_path)
             if os.path.exists(full_path):
                 try:
-                    with open(full_path, "r", encoding="utf-8") as f:
-                        code_content = f.read()
-                        context_lines.append(f"\n### File: {rel_path}\n```python\n{code_content}\n```")
+                    # with open(full_path, "r", encoding="utf-8") as f:
+                        # code_content = f.read()
+                    code_content = await asyncio.to_thread(
+                            Path(full_path).read_text,
+                            encoding="utf-8"
+                        )
+                    context_lines.append(f"\n### File: {rel_path}\n```python\n{code_content}\n```")
                 except Exception as e:
                     logger.warning(f"Could not read source file {full_path}: {e}")
                 # with open(full_path, "r", encoding="utf-8") as f:
@@ -117,7 +149,7 @@ class GraphQueryEngine:
     async def answer_question_stream(self, user_query: str, max_tokens: int = None):
         """Streams JSONL chunks, applies max_token limits, and captures telemetry."""
         logger.info(f"Assembling graph context for query: '{user_query}'")
-        graph_context = self._build_context_payload(user_query=user_query)
+        graph_context = await self._build_context_payload(user_query=user_query)
         
         # Configure Dynamic Limits
         execution_settings = OpenAIChatPromptExecutionSettings(
@@ -201,100 +233,3 @@ class GraphQueryEngine:
             logger.error(f"Streaming inference failed: {e}", exc_info=True)
             raise e
         
-        # @timeit
-    # def _build_context_payload(self, user_query: str) -> str:
-    #     """Serializes the dynamically filtered NetworkX graph for the LLM."""
-    #     try:
-    #         G = nx.read_graphml(self.graph_path, node_type=str)
-    #     except Exception as e:
-    #         logger.error(f"Failed to load graph database: {e}")
-    #         raise FileNotFoundError("Graph database not found.")
-
-    #     # --- RETRIEVAL PHASE ---
-    #     filtered_G = self._get_relevant_subgraph(G, user_query)
-
-    #     context_lines = ["# Codebase Semantic Map\n", "## Components & Logic"]
-    #     for node_id, data in filtered_G.nodes(data=True):
-    #         if summary := data.get("summary", ""):
-    #             context_lines.append(f"- [{data.get('type', 'unknown').upper()}] {node_id}: {summary}")
-
-    #     context_lines.append("\n## Structural Relationships")
-    #     for source, target, data in filtered_G.edges(data=True):
-    #         context_lines.append(f"- {source} explicitly {data.get('relation', 'unknown')} {target}")
-
-    #     return "\n".join(context_lines)
-    # @timeit
-    # def _build_context_payload(self) -> str:
-    #     """Serializes the NetworkX graph for the LLM."""
-    #     try:
-    #         G = nx.read_graphml(self.graph_path, node_type=str)
-    #     except Exception as e:
-    #         logger.error(f"Failed to load graph database: {e}")
-    #         raise FileNotFoundError("Graph database not found. Please run ingestion first.")
-
-    #     context_lines = ["# Codebase Semantic Map\n", "## Components & Logic"]
-    #     for node_id, data in G.nodes(data=True):
-    #         if summary := data.get("summary", ""):
-    #             context_lines.append(f"- [{data.get('type', 'unknown').upper()}] {node_id}: {summary}")
-
-    #     context_lines.append("\n## Structural Relationships")
-    #     for source, target, data in G.edges(data=True):
-    #         context_lines.append(f"- {source} explicitly {data.get('relation', 'unknown')} {target}")
-
-    #     return "\n".join(context_lines)
-    # @retry(wait=wait_exponential(multiplier=2, min=2, max=10), stop=stop_after_attempt(3), reraise=True)
-    # async def answer_question_stream(self, user_query: str):
-    #     """
-    #     Assembles context and returns an AsyncGenerator yielding pure text chunks.
-    #     Intercepts internal metadata to log tokens/sec.
-    #     """
-    #     logger.info(f"Assembling graph context for query: '{user_query}'")
-    #     graph_context = self._build_context_payload()
-        
-    #     arguments = KernelArguments(graph_context=graph_context, user_query=user_query)
-    #     logger.info("Routing streaming query to local Gemma 4 instance...")
-        
-    #     try:
-    #         async for chunks in self.kernel.invoke_prompt_stream(
-    #             prompt=GRAPH_RAG_PROMPT, 
-    #             arguments=arguments
-    #         ):
-    #             # Semantic Kernel usually yields a list of choices. Grab the first one.
-    #             chunk = chunks[0] if isinstance(chunks, list) else chunks
-                
-    #             # 1. Yield ONLY the pure text content to the HTTP stream
-    #             if chunk.content:
-    #                 yield chunk.content
-                    
-    #             # 2. Dynamic Telemetry Extraction Strategy
-    #             try:
-    #                 metadata = getattr(chunk, 'metadata', {})
-                    
-    #                 # Probe for timings dictionary (Direct attribute -> inner_content -> metadata)
-    #                 timings = None
-    #                 if hasattr(chunk, 'timings') and chunk.timings:
-    #                     timings = chunk.timings
-    #                 elif hasattr(chunk, 'inner_content') and chunk.inner_content:
-    #                     timings = getattr(chunk.inner_content, 'timings', None)
-    #                     if not timings and isinstance(chunk.inner_content, dict):
-    #                         timings = chunk.inner_content.get('timings')
-    #                 elif metadata and 'timings' in metadata:
-    #                     timings = metadata['timings']
-
-    #                 # If timings metrics are located, extract and log throughput
-    #                 if timings:
-    #                     # Handle both dictionary and object access styles
-    #                     tps = timings.get('predicted_per_second', 0) if isinstance(timings, dict) else getattr(timings, 'predicted_per_second', 0)
-                        
-    #                     # Extract exact token counts directly from llama-server's internal engine
-    #                     prompt_n = timings.get('prompt_n', 0) if isinstance(timings, dict) else getattr(timings, 'prompt_n', 0)
-    #                     predicted_n = timings.get('predicted_n', 0) if isinstance(timings, dict) else getattr(timings, 'predicted_n', 0)
-    #                     total_tokens = prompt_n + predicted_n
-                                
-    #                     logger.info(f"[TELEMETRY] Query complete | Time Taken: {total_tokens/tps:.2f} | Speed: {tps:.2f} tokens/sec | Total Tokens: {total_tokens} ({prompt_n} prompt + {predicted_n} generated)")
-    #             except Exception as e:
-    #                 logger.warning(f"Could not parse telemetry from chunk: {e}")
-
-    #     except Exception as e:
-    #         logger.error(f"Streaming inference failed: {e}", exc_info=True)
-    #         raise e

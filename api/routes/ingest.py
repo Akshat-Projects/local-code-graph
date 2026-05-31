@@ -53,15 +53,6 @@ async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
                 f"({SecurityConstraints.MAX_FILES})"
             )
     
-
-    for file_path in target_dir.rglob("*"):
-        if not file_path.is_file():
-            continue
-        relative_path = str(file_path.relative_to(target_dir))
-        if ignore_spec.match_file(relative_path):
-            continue
-        valid_files.append(file_path)
-    
     try:
         # Phase 1: Static AST Parsing
         librarian = Librarian(workspace_root=".", repo_name=repo_name)
@@ -70,14 +61,17 @@ async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
         manifest = librarian.scan_repository(target_path, valid_files=valid_files)
         
         parser = CodebaseASTParser(librarian.graph)
-        modified_count = 0
+        # modified_count = 0
+        modified_files = set()
         for rel_path, file_meta in manifest.items():
             if file_meta["status"] == "modified":
+                modified_files.add(rel_path)
                 parser.parse_file(file_meta["absolute_path"], rel_path, file_meta["hash"])
-                modified_count += 1
                 
-        if modified_count > 0:
-            librarian.save_graph()
+                # modified_count += 1
+                
+        # if modified_count > 0:
+        librarian.save_graph()
             
         # --- UI CONNECTION: The Streamlit Progress Callback ---
         def update_ui_progress(current: int, total: int, status_message: str):
@@ -89,7 +83,10 @@ async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
             }
             
         # Phase 2: LLM Semantic Analysis
-        analyst = GraphAnalyst(librarian=librarian, target_repo_path=target_path)
+        analyst = GraphAnalyst(
+            librarian=librarian, 
+            target_repo_path=target_path,
+            modified_files=modified_files)
         # Pass the callback so the backend can talk to the Streamlit UI!
         await analyst.analyze_and_update(progress_callback=update_ui_progress)
         
@@ -97,7 +94,7 @@ async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
         JOB_STORE[job_id] = {
             "status": "completed",
             "message": "Graph enriched and saved successfully.",
-            "details": {"files_modified": modified_count, "progress_percent": 100}
+            "details": {"files_modified": len(modified_files), "progress_percent": 100}
         }
         logger.info(f"Job {job_id} completed successfully.")
         

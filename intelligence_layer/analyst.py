@@ -17,12 +17,40 @@ from utils.logger import get_logger
 logger = get_logger()
 
 class GraphAnalyst:
-    def __init__(self, librarian: Librarian, target_repo_path: str):
+    def __init__(self, librarian: Librarian, target_repo_path: str, modified_files: set[str] | None = None):
         self.librarian = librarian
         self.target_repo_path = target_repo_path
         self.assembler = ContextAssembler(self.librarian.graph, self.target_repo_path)
         self.kernel = LocalKernelFactory.create_kernel()
+        self.modified_files = modified_files or set()
 
+    def _needs_analysis(self, batch_data: dict) -> bool:
+        """
+        Analyze if:
+        1. File was modified
+        2. Any contained node lacks a summary
+        """
+
+        file_path = batch_data["file_path"]
+
+        # Modified file always needs re-analysis
+        if file_path in self.modified_files:
+            return True
+
+        # Check if any node is missing intelligence
+        for node_id in batch_data["contained_nodes"]:
+
+            node_data = self.librarian.graph.nodes.get(
+                node_id,
+                {}
+            )
+
+            if not node_data.get("summary"):
+                return True
+
+        return False
+    
+    
     def _clean_json_response(self, text: str) -> str:
         text = text.strip()
         if text.startswith("```json"):
@@ -52,7 +80,15 @@ class GraphAnalyst:
         logger.info("--- Starting Phase 2 LLM Analysis ---")
         
         global_symbols = self.assembler.get_global_symbol_list()
-        batches = self.assembler.build_module_batches()
+        # batches = self.assembler.build_module_batches()
+        all_batches = self.assembler.build_module_batches()
+        
+        batches = {
+            file_node: batch 
+            for file_node, batch in all_batches.items()
+            # if batch["file_path"] in self.modified_files
+            if self._needs_analysis(batch)
+        }
         
         if not batches:
             logger.info("No modules found to analyze. Graph is up to date.")
