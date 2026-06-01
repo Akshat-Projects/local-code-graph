@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from models.query_llm import QueryRequest
+from utils.helper import validate_ingestion_path
 from intelligence_layer.query_engine import GraphQueryEngine
 from utils.logger import get_logger
 
@@ -14,10 +15,14 @@ async def ask_codebase(request: QueryRequest):
     Submits a natural language question and streams the answer back.
     """
     logger.info(f"Received streaming query for repo: {request.repo_name}")
+    target_dir = validate_ingestion_path(
+            request.target_path
+        )
     try:
         engine = GraphQueryEngine(
-            target_repo_path=request.target_path,
-            repo_name=request.repo_name
+            # target_repo_path=request.target_path,
+            repo_name=request.repo_name,
+            target_repo_path=str(target_dir)
             )
         
         # Grab the async generator

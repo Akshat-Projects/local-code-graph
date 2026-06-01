@@ -28,7 +28,7 @@ class GraphAnalyst:
         """
         Analyze if:
         1. File was modified
-        2. Any contained node lacks a summary
+        2. Any contained node is not marked complete
         """
 
         file_path = batch_data["file_path"]
@@ -45,7 +45,9 @@ class GraphAnalyst:
                 {}
             )
 
-            if not node_data.get("summary"):
+            # if not node_data.get("summary"):
+            #     return True
+            if node_data.get("analysis_status") != "complete":
                 return True
 
         return False
@@ -74,76 +76,411 @@ class GraphAnalyst:
             prompt=CODE_ANALYSIS_PROMPT, 
             arguments=arguments
         )
-
+        
+        
     @timeit
-    async def analyze_and_update(self, progress_callback = None):
+    async def analyze_and_update(self, progress_callback=None):
         logger.info("--- Starting Phase 2 LLM Analysis ---")
-        
+
         global_symbols = self.assembler.get_global_symbol_list()
-        # batches = self.assembler.build_module_batches()
         all_batches = self.assembler.build_module_batches()
-        
+
         batches = {
-            file_node: batch 
+            file_node: batch
             for file_node, batch in all_batches.items()
-            # if batch["file_path"] in self.modified_files
             if self._needs_analysis(batch)
         }
-        
+
         if not batches:
             logger.info("No modules found to analyze. Graph is up to date.")
             return
-        
+
         total_batches = len(batches)
         current = 0
 
         for file_node, batch_data in batches.items():
             current += 1
-            
+
             if progress_callback:
-                progress_callback(current, total_batches, f"Analyzing {batch_data['file_path']}...")
+                progress_callback(
+                    current,
+                    total_batches,
+                    f"Analyzing {batch_data['file_path']}..."
+                )
+
             logger.info(f"Analyzing Module: {batch_data['file_path']}")
             
+            # ==========================================
+            # NEW: FILE-LEVEL ARCHITECTURAL SUMMARIZATION
+            # ==========================================
+            file_node_data = self.librarian.graph.nodes.get(file_node, {})
+            
+            # Only summarize if it doesn't already have one
+            if not file_node_data.get("summary") or file_node_data.get("summary") == "No summary available.":
+                logger.info(f"Generating architectural summary for file: {batch_data['file_path']}")
+                
+                # Direct, simple prompt for the file overview (Cleaned up for IDE compatibility)
+                file_prompt = f"""You are a Senior Software Architect. Read the following Python file and write
+                a highly concise, 2-3 sentence summary of its overarching purpose, what it is responsible for, 
+                and its role in the broader architecture. Do NOT output JSON, just the raw text summary.
+
+                File: {batch_data['file_path']}
+                Code:
+                {batch_data['raw_code']}
+                """
+                try:
+                    # Execute Inference for the File summary
+                    file_result = await self.kernel.invoke_prompt(prompt=file_prompt)
+                    
+                    # Save the generated text directly to the file node in the graph
+                    self.librarian.graph.nodes[file_node]["summary"] = str(file_result).strip()
+                    logger.debug(f"File summary successfully generated for {file_node}")
+                    
+                except Exception as e:
+                    logger.warning(f"Could not generate summary for file {batch_data['file_path']}: {e}")
+            # ==========================================
+
             target_node_ids = batch_data["contained_nodes"]
+
             arguments = KernelArguments(
-                target_nodes=json.dumps(target_node_ids, indent=2),
-                global_symbol_list=json.dumps(global_symbols, indent=2),
+                target_nodes=json.dumps(
+                    target_node_ids,
+                    indent=2
+                ),
+                global_symbol_list=json.dumps(
+                    global_symbols,
+                    indent=2
+                ),
                 raw_code=batch_data["raw_code"]
             )
-            
+
             try:
-                # 1. Execute Inference Loop (Now protected by Tenacity)
-                result = await self._invoke_llm_with_retries(arguments)
-                raw_response = self._clean_json_response(str(result))
-                
-                # 2. Enforce Pydantic Schema
-                parsed_data = ModuleAnalysis.model_validate_json(raw_response)
-                logger.info(f"Successfully parsed {len(parsed_data.analyzed_nodes)} nodes.")
-                
-                # 3. Inject Intelligence into NetworkX
+                # 1. Execute Inference for Functions/Classes
+                result = await self._invoke_llm_with_retries(
+                    arguments
+                )
+
+                raw_response = self._clean_json_response(
+                    str(result)
+                )
+
+                # 2. Validate Schema
+                parsed_data = (
+                    ModuleAnalysis
+                    .model_validate_json(raw_response)
+                )
+
+                logger.info(
+                    f"Successfully parsed "
+                    f"{len(parsed_data.analyzed_nodes)} nodes."
+                )
+
+                # 3. Inject Intelligence
                 for node_data in parsed_data.analyzed_nodes:
+
                     node_id = node_data.node_id
+
                     if node_id in self.librarian.graph:
-                        self.librarian.graph.nodes[node_id]["summary"] = node_data.summary
-                    
+                        self.librarian.graph.nodes[node_id][
+                            "summary"
+                        ] = node_data.summary
+
+                        self.librarian.graph.nodes[node_id][
+                            "analysis_status"
+                        ] = "complete"
+
                     for edge in node_data.dependencies:
                         target_id = edge.target_id
+
                         if target_id in self.librarian.graph:
-                            self.librarian.graph.add_edge(node_id, target_id, relation=edge.relation)
-                            logger.debug(f"Added explicit edge: {node_id} --({edge.relation})--> {target_id}")
+                            self.librarian.graph.add_edge(
+                                node_id,
+                                target_id,
+                                relation=edge.relation
+                            )
+
+                            logger.debug(
+                                f"Added explicit edge: "
+                                f"{node_id} "
+                                f"--({edge.relation})--> "
+                                f"{target_id}"
+                            )
+
+                # Persist successful module immediately
+                self.librarian.save_graph()
 
             except ValidationError as e:
-                logger.error(f"Schema Validation Error on {batch_data['file_path']}: {e}")
-                raise Exception(f"LLM Output Schema Validation Failed: {e}") 
+                logger.error(
+                    f"Schema Validation Error on "
+                    f"{batch_data['file_path']}: {e}"
+                )
+
+                for node_id in target_node_ids:
+                    if node_id in self.librarian.graph:
+                        self.librarian.graph.nodes[node_id][
+                            "analysis_status"
+                        ] = "failed_validation"
+
+                self.librarian.save_graph()
+                continue
+
             except Exception as e:
-                logger.error(f"Execution Error on {batch_data['file_path']}: {e}")
-                # We raise the exception so ingest.py knows the pipeline completely failed!
-                raise e
-                
-        # 4. Save the enriched graph ONLY if no exceptions were raised
-        logger.info("--- Saving Enriched Graph ---")
+                logger.error(
+                    f"Execution Error on "
+                    f"{batch_data['file_path']}: {e}"
+                )
+
+                for node_id in target_node_ids:
+                    if node_id in self.librarian.graph:
+                        self.librarian.graph.nodes[node_id][
+                            "analysis_status"
+                        ] = "failed_runtime"
+
+                self.librarian.save_graph()
+                raise
+
+        logger.info("--- Final Graph Flush ---")
         self.librarian.save_graph()
+
         logger.info("Phase 2 Complete!")
+        
+    # @timeit
+    # async def analyze_and_update(self, progress_callback=None):
+    #     logger.info("--- Starting Phase 2 LLM Analysis ---")
+
+    #     global_symbols = self.assembler.get_global_symbol_list()
+    #     all_batches = self.assembler.build_module_batches()
+
+    #     batches = {
+    #         file_node: batch
+    #         for file_node, batch in all_batches.items()
+    #         if self._needs_analysis(batch)
+    #     }
+
+    #     if not batches:
+    #         logger.info("No modules found to analyze. Graph is up to date.")
+    #         return
+
+    #     total_batches = len(batches)
+    #     current = 0
+
+    #     for file_node, batch_data in batches.items():
+    #         current += 1
+
+    #         if progress_callback:
+    #             progress_callback(
+    #                 current,
+    #                 total_batches,
+    #                 f"Analyzing {batch_data['file_path']}..."
+    #             )
+
+    #         logger.info(
+    #             f"Analyzing Module: {batch_data['file_path']}"
+    #         )
+
+    #         target_node_ids = batch_data["contained_nodes"]
+
+    #         arguments = KernelArguments(
+    #             target_nodes=json.dumps(
+    #                 target_node_ids,
+    #                 indent=2
+    #             ),
+    #             global_symbol_list=json.dumps(
+    #                 global_symbols,
+    #                 indent=2
+    #             ),
+    #             raw_code=batch_data["raw_code"]
+    #         )
+
+    #         try:
+    #             # 1. Execute Inference
+    #             result = await self._invoke_llm_with_retries(
+    #                 arguments
+    #             )
+
+    #             raw_response = self._clean_json_response(
+    #                 str(result)
+    #             )
+
+    #             # 2. Validate Schema
+    #             parsed_data = (
+    #                 ModuleAnalysis
+    #                 .model_validate_json(raw_response)
+    #             )
+
+    #             logger.info(
+    #                 f"Successfully parsed "
+    #                 f"{len(parsed_data.analyzed_nodes)} nodes."
+    #             )
+
+    #             # 3. Inject Intelligence
+    #             for node_data in parsed_data.analyzed_nodes:
+
+    #                 node_id = node_data.node_id
+
+    #                 if node_id in self.librarian.graph:
+
+    #                     self.librarian.graph.nodes[node_id][
+    #                         "summary"
+    #                     ] = node_data.summary
+
+    #                     self.librarian.graph.nodes[node_id][
+    #                         "analysis_status"
+    #                     ] = "complete"
+
+    #                 for edge in node_data.dependencies:
+
+    #                     target_id = edge.target_id
+
+    #                     if target_id in self.librarian.graph:
+
+    #                         self.librarian.graph.add_edge(
+    #                             node_id,
+    #                             target_id,
+    #                             relation=edge.relation
+    #                         )
+
+    #                         logger.debug(
+    #                             f"Added explicit edge: "
+    #                             f"{node_id} "
+    #                             f"--({edge.relation})--> "
+    #                             f"{target_id}"
+    #                         )
+
+    #             # Persist successful module immediately
+    #             self.librarian.save_graph()
+
+    #         except ValidationError as e:
+
+    #             logger.error(
+    #                 f"Schema Validation Error on "
+    #                 f"{batch_data['file_path']}: {e}"
+    #             )
+
+    #             for node_id in target_node_ids:
+
+    #                 if node_id in self.librarian.graph:
+
+    #                     self.librarian.graph.nodes[node_id][
+    #                         "analysis_status"
+    #                     ] = "failed_validation"
+
+    #             self.librarian.save_graph()
+
+    #             # Continue with remaining modules
+    #             continue
+
+    #         except Exception as e:
+
+    #             logger.error(
+    #                 f"Execution Error on "
+    #                 f"{batch_data['file_path']}: {e}"
+    #             )
+
+    #             for node_id in target_node_ids:
+
+    #                 if node_id in self.librarian.graph:
+
+    #                     self.librarian.graph.nodes[node_id][
+    #                         "analysis_status"
+    #                     ] = "failed_runtime"
+
+    #             self.librarian.save_graph()
+
+    #             # Stop ingestion and surface failure
+    #             raise
+
+    #     logger.info("--- Final Graph Flush ---")
+    #     self.librarian.save_graph()
+
+        # logger.info("Phase 2 Complete!")
+    # @timeit
+    # async def analyze_and_update(self, progress_callback = None):
+    #     logger.info("--- Starting Phase 2 LLM Analysis ---")
+        
+    #     global_symbols = self.assembler.get_global_symbol_list()
+    #     # batches = self.assembler.build_module_batches()
+    #     all_batches = self.assembler.build_module_batches()
+        
+    #     batches = {
+    #         file_node: batch 
+    #         for file_node, batch in all_batches.items()
+    #         # if batch["file_path"] in self.modified_files
+    #         if self._needs_analysis(batch)
+    #     }
+        
+    #     if not batches:
+    #         logger.info("No modules found to analyze. Graph is up to date.")
+    #         return
+        
+    #     total_batches = len(batches)
+    #     current = 0
+
+    #     for file_node, batch_data in batches.items():
+    #         current += 1
+            
+    #         if progress_callback:
+    #             progress_callback(current, total_batches, f"Analyzing {batch_data['file_path']}...")
+    #         logger.info(f"Analyzing Module: {batch_data['file_path']}")
+            
+    #         target_node_ids = batch_data["contained_nodes"]
+    #         arguments = KernelArguments(
+    #             target_nodes=json.dumps(target_node_ids, indent=2),
+    #             global_symbol_list=json.dumps(global_symbols, indent=2),
+    #             raw_code=batch_data["raw_code"]
+    #         )
+            
+    #         try:
+    #             # 1. Execute Inference Loop (Now protected by Tenacity)
+    #             result = await self._invoke_llm_with_retries(arguments)
+    #             raw_response = self._clean_json_response(str(result))
+                
+    #             # 2. Enforce Pydantic Schema
+    #             parsed_data = ModuleAnalysis.model_validate_json(raw_response)
+    #             logger.info(f"Successfully parsed {len(parsed_data.analyzed_nodes)} nodes.")
+                
+    #             # 3. Inject Intelligence into NetworkX
+    #             for node_data in parsed_data.analyzed_nodes:
+    #                 node_id = node_data.node_id
+    #                 if node_id in self.librarian.graph:
+    #                     self.librarian.graph.nodes[node_id]["summary"] = node_data.summary
+    #                     self.librarian.graph.nodes[node_id]["analysis_status"] = "complete"
+                    
+    #                 for edge in node_data.dependencies:
+    #                     target_id = edge.target_id
+    #                     if target_id in self.librarian.graph:
+    #                         self.librarian.graph.add_edge(node_id, target_id, relation=edge.relation)
+    #                         logger.debug(f"Added explicit edge: {node_id} --({edge.relation})--> {target_id}")
+                    
+
+    #         except ValidationError as e:
+    #             logger.error(f"Schema Validation Error on {batch_data['file_path']}: {e}")
+    #             for node_id in target_node_ids:
+    #                 if node_id in self.librarian.graph:
+    #                     self.librarian.graph.nodes[node_id][
+    #                         "analysis_status"
+    #                     ] = "failed_validation"
+
+    #             self.librarian.save_graph()
+    #             continue
+    #             # raise Exception(f"LLM Output Schema Validation Failed: {e}") 
+    #         except Exception as e:
+    #             logger.error(f"Execution Error on {batch_data['file_path']}: {e}")
+    #             for node_id in target_node_ids:
+    #                 if node_id in self.librarian.graph:
+    #                     self.librarian.graph.nodes[node_id][
+    #                         "analysis_status"
+    #                     ] = "failed_runtime"
+    #             self.librarian.save_graph()
+    #             raise
+    #             # We raise the exception so ingest.py knows the pipeline completely failed!
+    #             # raise e
+    #     self.librarian.save_graph()
+                
+    #     # 4. Save the enriched graph ONLY if no exceptions were raised
+    #     logger.info("--- Saving Enriched Graph ---")
+    #     # self.librarian.save_graph()
+    #     logger.info("Phase 2 Complete!")
         
 
 # ---------------------------------------------------------

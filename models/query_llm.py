@@ -1,8 +1,17 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Annotated
 
+
+RepoName = Annotated[
+    str,
+    Field(
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        min_length=1,
+        max_length=100
+    )
+]
 class QueryRequest(BaseModel):
-    repo_name: str = Field(
+    repo_name: RepoName = Field(
         ..., 
         description="The exact name of the ingested repository workspace to query against.",
         examples=["Conv2dLSTM"]

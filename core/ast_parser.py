@@ -61,7 +61,8 @@ class CodebaseASTParser:
                     file_path=relative_path,
                     line_start=child.lineno,
                     line_end=getattr(child, "end_lineno", child.lineno),
-                    summary=""  # Initial empty string slot for Gemma 4 to fill later
+                    summary="",  # Initial empty string slot for Gemma 4 to fill later
+                    analysis_status="pending"
                 )
                 # Connect structural dependency: File contains Class
                 self.graph.add_edge(file_node_id, node_id, relation="contains")
@@ -79,7 +80,8 @@ class CodebaseASTParser:
                     line_start=child.lineno,
                     line_end=getattr(child, "end_lineno", child.lineno),
                     signature=signature,
-                    summary=""  # Initial empty string slot for Gemma 4 to fill later
+                    summary="",  # Initial empty string slot for Gemma 4 to fill later
+                    analysis_status="pending"
                 )
                 # Connect structural dependency: File contains Function
                 self.graph.add_edge(file_node_id, node_id, relation="contains")

@@ -9,8 +9,9 @@ from semantic_kernel.connectors.ai.open_ai import OpenAIChatPromptExecutionSetti
 
 from config import settings
 from utils.logger import get_logger
-from utils.helper import timeit
+from utils.helper import timeit, validate_ingestion_path
 from intelligence_layer.kernel_client import LocalKernelFactory
+from utils.global_cache import GRAPH_CACHE, GRAPH_MTIME
 from intelligence_layer.prompts import GRAPH_RAG_PROMPT
 
 logger = get_logger()
@@ -20,7 +21,8 @@ class GraphQueryEngine:
         self.repo_name = repo_name
         self.graph_path = f".localgraph/storage/{repo_name}/graph.graphml"
         self.kernel = LocalKernelFactory.create_kernel()
-        self.target_repo_path = target_repo_path
+        # self.target_repo_path = target_repo_path
+        self.target_repo_path = str(validate_ingestion_path(target_repo_path))
         # Enable caching for faster query result
         self._graph_cache = None
         self._graph_mtime = None
@@ -66,19 +68,37 @@ class GraphQueryEngine:
         return G.subgraph(subgraph_nodes)
     
     
-    def _load_graph(self):
-        current_mtime = os.path.getmtime(
-            self.graph_path
-        )
-        if (self._graph_cache is None or self._graph_mtime != current_mtime):
-            logger.info("Reloading graph cache...")
-            self._graph_cache = nx.read_graphml(
-                self.graph_path,
-                node_type=str
-            )
-            self._graph_mtime = current_mtime
+    # def _load_graph(self):
+    #     current_mtime = os.path.getmtime(
+    #         self.graph_path
+    #     )
+    #     if (self._graph_cache is None or self._graph_mtime != current_mtime):
+    #         logger.info("Reloading graph cache...")
+    #         self._graph_cache = nx.read_graphml(
+    #             self.graph_path,
+    #             node_type=str
+    #         )
+    #         self._graph_mtime = current_mtime
 
-        return self._graph_cache
+    #     return self._graph_cache
+    def _load_graph(self):
+        current_mtime = os.path.getmtime(self.graph_path)
+        if (
+            self.graph_path not in GRAPH_CACHE
+            or GRAPH_MTIME[self.graph_path]
+            != current_mtime
+        ):
+            logger.info("Reloading graph cache...")
+            GRAPH_CACHE[self.graph_path] = (
+                nx.read_graphml(
+                    self.graph_path,
+                    node_type=str
+                )
+            )
+            GRAPH_MTIME[self.graph_path] = (
+                current_mtime
+            )
+        return GRAPH_CACHE[self.graph_path]
     
     @timeit
     async def _build_context_payload(self, user_query: str) -> str:

@@ -48,7 +48,7 @@ echo "[2/3] Booting FastAPI Backend..."
 uv run main.py &
 API_PID=$!
 
-sleep 7
+sleep 10
 
 # 3. Boot the Streamlit UI
 echo "[3/3] Booting Streamlit Command Center..."
