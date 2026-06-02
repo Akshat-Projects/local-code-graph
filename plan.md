@@ -92,25 +92,97 @@ The Intelligence Engine (Phase 2): A Semantic Kernel loop connected to your loca
 The Gateway (Phase 3): A modern FastAPI layer featuring asynchronous background workers, an in-memory job polling queue, exponential backoff for LLM timeouts via Tenacity, and a dedicated RAG endpoint for querying the database.
 
 🚀 2. What We Can Do With It Right Now
-With just the API running on port 8000, you can currently use tools like Postman, curl, or simple Python scripts to:
+1. With just the API running on port 8000, you can currently use tools like Postman, curl, or simple Python scripts to:
 
-Automate Code Documentation: Instantly generate high-level architectural summaries of an entire codebase without writing them by hand.
+2. Automate Code Documentation: Instantly generate high-level architectural summaries of an entire codebase without writing them by hand.
 
-Prevent Breaking Changes: Query the raw graph to see exactly what downstream functions instantiate or call a specific class before you refactor it.
+3. Prevent Breaking Changes: Query the raw graph to see exactly what downstream functions instantiate or call a specific class before you refactor it.
 
-Chat with the Architecture: Use the /api/v1/query endpoint to ask Gemma 4 complex questions about data flow, business logic, or file structures, knowing the LLM is restricted to the absolute truth of your graph context.
+4. Chat with the Architecture: Use the /api/v1/query endpoint to ask Gemma 4 complex questions about data flow, business logic, or file structures, knowing the LLM is restricted to the absolute truth of your graph context.
 
-Scale to Massive Repositories: Queue up massive codebases for ingestion without timing out your HTTP clients, letting your local GPU chew through the files safely in the background.
+5. Scale to Massive Repositories: Queue up massive codebases for ingestion without timing out your HTTP clients, letting your local GPU chew through the files safely in the background.
 
 🔭 3. What Else We Can Do (Future Possibilities)
 Because the foundation is structurally sound, the ceiling for this project is incredibly high. Here are a few advanced paths we can eventually unlock:
 
-The Streamlit Command Center: A web interface where you can drop in a repo path, watch a progress bar poll the ingestion status, and use a ChatGPT-style window to interrogate the Graph-RAG endpoint.
+1. The Streamlit Command Center: A web interface where you can drop in a repo path, watch a progress bar poll the ingestion status, and use a ChatGPT-style window to interrogate the Graph-RAG endpoint.
 
-Agentic Code Generation: Instead of just asking questions, we can expose an endpoint that writes new code. Because it has the Graph Map, you could ask it to "Add a new endpoint to routes.py that uses the existing DataNormalizer," and it would know exactly where those files are and what they expect.
+2. Agentic Code Generation: Instead of just asking questions, we can expose an endpoint that writes new code. Because it has the Graph Map, you could ask it to "Add a new endpoint to routes.py that uses the existing DataNormalizer," and it would know exactly where those files are and what they expect.
 
-Hybrid Search (Graph + Vector): Right now, we feed the whole text graph to the LLM. For massive enterprise repos, we could embed the node summaries into a local vector database (like ChromaDB or FAISS), allowing us to search thousands of files instantly before passing the closest matches to Gemma 4.
+3. Hybrid Search (Graph + Vector): Right now, we feed the whole text graph to the LLM. For massive enterprise repos, we could embed the node summaries into a local vector database (like ChromaDB or FAISS), allowing us to search thousands of files instantly before passing the closest matches to Gemma 4.
 
-Visual Network Topography: Integrating a library like pyvis or Streamlit's native graph components to visually render the nodes and edges, letting you click on a function and see its code and summary pop up in a sidebar.
+4. Visual Network Topography: Integrating a library like pyvis or Streamlit's native graph components to visually render the nodes and edges, letting you click on a function and see its code and summary pop up in a sidebar.
 
-Since you mentioned Streamlit as our next target, what is the primary feature you want to see when you first open that dashboard—the Graph-RAG chat, or a control panel for managing ingestions?
+5. Since you mentioned Streamlit as our next target, what is the primary feature you want to see when you first open that dashboard—the Graph-RAG chat, or a control panel for managing ingestions?
+
+ Make it Executable
+You need to give Ubuntu permission to run this file as a program. Run this once in your terminal:
+
+```Bash
+chmod +x start.sh
+```
+3. Trigger Everything at Once
+From now on, whenever you want to work on your project, you only need to open one single terminal, navigate to your project folder, and type:
+
+```Bash
+./start.sh
+```
+Option 1: Hybrid Search (Graph + Vector)
+Right now, the retrieval layer relies on exact keyword matching over node names and summaries. If a user asks a conceptual question like "How do we clean raw data before feeding it to the model?" but the codebase uses names like DataNormalizer or process_tensor, keyword search can easily miss it.
+
+Integrating a local vector database establishes a two-stage hybrid retrieval pipeline:
+
+                  [ User Question ]
+                          │
+         ┌────────────────┴────────────────┐
+         ▼                                 ▼
+┌─────────────────┐               ┌─────────────────┐
+│ Dense Retrieval │               │ Sparse/Keyword  │
+│  (Vector DB)    │               │  (Graph Search) │
+└────────┬────────┘               └────────┬────────┘
+         │                                 │
+         └────────────────┬────────────────┘
+                          ▼
+              [ Reciprocal Rank Fusion ]
+                          │
+                          ▼
+            [ Extract Top-K Seed Nodes ]
+                          │
+                          ▼
+          [ 1-Hop Graph Context Expansion ]
+                          │
+                          ▼
+                  [ Prompt to LLM ]
+How it integrates into your system:
+The Embedding Layer: During the background ingestion job (run_ingestion_pipeline), every time a file or class node is generated or modified, its summary text is sent to a local text-embedding utility (like sentence-transformers running locally on the CPU or GPU).
+
+The Storage Layer: A lightweight local vector store like ChromaDB or FAISS runs right alongside your FastAPI backend, storing the generated vector embeddings.
+
+The Query Phase: When a question comes in, the backend performs a similarity search against the vector database to locate the top relevant components by semantic meaning, merges those results with the keyword search, and expands the graph around those seed nodes.
+
+Pros: Bulletproof semantic understanding; solves the problem of vocabulary mismatch.
+
+Cons: Increases ingestion time (requires generating embeddings) and adds VRAM/RAM overhead for the embedding model.
+
+Option 2: Visual Network Topography
+A codebase is fundamentally a multi-dimensional map. Text blocks can only convey so much structure. Visually rendering the graph turns the Streamlit UI into a command center where relationships become tangible.
+
+How it integrates into your system:
+The Parsing Layer: Streamlit reads the generated .graphml file natively using NetworkX when a repository is loaded.
+
+The Rendering Layer: Using a component like streamlit-agraph (a wrapper around vis.js) or exporting an interactive HTML canvas via pyvis, the center panel of the app displays a fluid, force-directed node-link diagram.
+
+The Interaction Loop: Clicking a node triggers a Streamlit callback that captures the node ID (e.g., model.py::ConvLSTM2DPipeline). The app then queries the backend to pull that specific file's raw code and displays it instantly in a clean sidebar slide-out or expander.
+
+Pros: Exceptional user experience; lets developers instantly spot tightly coupled legacy bottlenecks or isolated modules visually.
+
+Cons: Large codebases can create "hairball" visualization problems if not carefully clustered or limited to the retrieved sub-graph.
+
+The Blueprint Strategy
+To keep development clean, the best approach is to tackle the data architecture before modifying the visual canvas. Building the semantic backbone first ensures that the visual map can be filtered intelligently down the line.
+
+Which optimization aligns best with the current needs for the platform?
+
+The Retrieval Route: Begin setting up a local vector store to handle complex, conceptual semantic programming questions.
+
+The Interface Route: Dive into rendering interactive node networks directly inside the Streamlit terminal panel.

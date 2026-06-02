@@ -43,9 +43,16 @@ class ContextAssembler:
             file_path = self.graph.nodes[file_node]["file_path"]
             absolute_path = os.path.join(self.target_repo_path, file_path)
             
-            # 2. Find all functions and classes contained in this file
-            # NetworkX successors of a file node are its classes and functions
+            # 2. Find all functions, classes, and class methods contained in this file
+            # NetworkX successors of a file node are its classes and module-level functions
             internal_nodes = list(self.graph.successors(file_node))
+            
+            # Also retrieve class methods (successors of class nodes)
+            method_nodes = []
+            for node in internal_nodes:
+                if self.graph.nodes[node].get("type") == "class":
+                    method_nodes.extend(self.graph.successors(node))
+            internal_nodes.extend(method_nodes)
             
             if not internal_nodes:
                 continue # Skip empty files

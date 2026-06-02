@@ -1,16 +1,20 @@
+import uuid
+import re
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from models.request import IngestRequest, JobStatusResponse
 from typing import Any, Dict
-from utils.helper import get_ignore_spec
 from pathlib import Path
+import networkx as nx
+import textwrap
 
 from core.librarian import Librarian
 from core.ast_parser import CodebaseASTParser
 from intelligence_layer.analyst import GraphAnalyst
 from utils.helper import validate_ingestion_path
 from utils.constants import SecurityConstraints
+from utils.helper import get_ignore_spec
 from utils.logger import get_logger
-import uuid
+
 
 
 logger = get_logger()
@@ -152,6 +156,146 @@ async def get_job_status(job_id: str):
         message=job_data.get("message"),
         details=job_data.get("details")
     )
+    
+
+@router.get("/visualize/{repo_name}")
+async def get_graph_visualization(repo_name: str):
+    """Returns the graph data formatted for vis.js / streamlit-agraph."""
+    
+    temp_librarian = Librarian(workspace_root=".", repo_name=repo_name)
+    graph_path = Path(temp_librarian.graph_path)
+    
+    if not graph_path.exists():
+        logger.error(f"❌ VISUALIZER ERROR: Graph file not found at {graph_path.absolute()}")
+        raise HTTPException(status_code=404, detail="Graph not found. Ingest the repo first.")
+        
+    try:
+        G = nx.read_graphml(graph_path, node_type=str) 
+        
+        nodes = []
+        edges = []
+        
+        # Collect unique file groups to assign colors using Tableau 10 palette
+        unique_groups = sorted(list(set(str(nid).split("::")[0] for nid in G.nodes())))
+        tableau10 = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC"]
+        group_colors = {group: tableau10[i % len(tableau10)] for i, group in enumerate(unique_groups)}
+        
+        # Format Nodes
+        for node_id, data in G.nodes(data=True):
+            node_type = data.get("type", "unknown")
+            
+            parts = str(node_id).split("::")
+            file_group = parts[0] 
+            label = parts[-1]
+            
+            # 1. Color node based on its file group (clustering by module)
+            color = group_colors.get(file_group, "#E2E8F0")
+            
+            # 2. Scale node size dynamically based on degree (hubness) and node type
+            degree = G.degree(node_id)
+            if node_type == "file":
+                size = 32 + min(degree * 2, 20)
+                font_size = 11
+                font_color = "#E2E8F0"
+                shape = "hexagon"
+                mass = 6
+            elif node_type == "class":
+                size = 18 + min(degree * 1.5, 12)
+                font_size = 9
+                font_color = "#CBD5E0"
+                shape = "dot"
+                mass = 2
+            else: # function/method
+                size = 10 + min(degree * 1, 8)
+                font_size = 0  # Hide labels of small methods/functions to prevent screen clutter
+                font_color = "#A0AEC0"
+                shape = "dot"
+                mass = 1
+            
+            # Smart Tooltips
+            summary = data.get("summary", "").strip()
+            summary = re.sub(r"<[^>]+>", "", summary).strip()
+            if not summary or summary == "No summary available.":
+                if node_type == "file":
+                    raw_title = f"📄 Source File: {label}"
+                elif node_type == "class":
+                    raw_title = f"📦 Class: {label}"
+                else:
+                    raw_title = f"⚙️ Function: {label}"
+            else:
+                raw_title = summary
+                
+            wrapped_title = textwrap.fill(raw_title, width=60)
+            
+            nodes.append({
+                "id": str(node_id),
+                "label": label,       # truncated display label
+                "title": wrapped_title,
+                "summary": wrapped_title,
+                "group": file_group,
+                "type": node_type,  
+                "shape": shape,
+                "color": color,
+                "size": size,
+                "mass": mass,
+                "font": {"size": font_size, "color": font_color},  # hide labels for methods by default
+            })
+        
+        # # Format Nodes
+        # for node_id, data in G.nodes(data=True):
+        #     node_type = data.get("type", "unknown")
+        #     label = str(node_id).split("::")[-1]
+            
+        #     # 1. Color-code based on entity type
+        #     color = "#E2E8F0"
+        #     if node_type == "class": color = "#F6AD55"
+        #     elif node_type == "function": color = "#68D391"
+        #     elif node_type == "file": color = "#63B3ED"
+            
+        #     # 2. FIX: Smart Tooltips (Titles)
+        #     summary = data.get("summary", "").strip()
+        #     if not summary or summary == "No summary available.":
+        #         if node_type == "file":
+        #             raw_title = f"📄 Source File: {label}"
+        #         elif node_type == "class":
+        #             raw_title = f"📦 Class: {label}"
+        #         else:
+        #             raw_title = f"⚙️ Function: {label}"
+        #     else:
+        #         raw_title = summary
+                
+        #     # Breaks the text into multiple lines every ~60 characters
+        #     wrapped_title = textwrap.fill(raw_title, width=60)
+            
+        #     nodes.append({
+        #         "id": str(node_id),
+        #         "label": label,
+        #         "title": wrapped_title,
+        #         "color": color,
+        #         "size": 45 if node_type == "file" else 18 if node_type == "class" else 12,
+        #         "mass": 8 if node_type == "file" else 1
+        #     })
+            
+        # Format Edges
+        for source, target, data in G.edges(data=True):
+            relation = data.get("relation", "")
+            
+            # 3. FIX: Hide visually obvious structural labels to reduce clutter
+            # We keep valuable semantic labels like "calls", "inherits", or "instantiates"
+            # display_label = "" if relation in ["contains", "defines"] else relation
+            display_label = ""
+            
+            edges.append({
+                "source": str(source),
+                "target": str(target),
+                "label": display_label
+            })
+            
+        return {"nodes": nodes, "edges": edges}
+        
+    except Exception as e:
+        logger.error(f"❌ VISUALIZER ERROR: Failed to parse graphml: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
     
     
 def update_progress(current: int, total: int, status_message: str, job_id: str):
