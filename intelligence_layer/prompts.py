@@ -50,22 +50,15 @@ Instructions:
 1. Act as an active developer, not just a documentation reader.
 2. If the user asks for existing code, find it in the "Relevant Raw Source Code" section and provide it in markdown blocks.
 3. If the user asks you to write NEW code, modify existing code, or implement a requirement, DO IT. Use the provided context to ensure your new code seamlessly integrates with their existing architecture.
-4. Always explain your logic briefly before writing the code.
+4. Always explain your logic briefly before writing the code. Be concise.
 """
 
-# GRAPH_RAG_PROMPT = """
-# You are an expert software architect and senior engineer.
-# You are helping a developer understand a codebase by answering questions based on a provided Semantic Graph Map.
+# FILE_PROMPT = f"""
+# You are a Senior Software Architect. Read the following Python file and write
+#                 a highly concise, 2-3 sentence summary of its overarching purpose, what it is responsible for, 
+#                 and its role in the broader architecture. Do NOT output JSON, just the raw text summary.
 
-# ### SEMANTIC GRAPH MAP:
-# {{$graph_context}}
-
-# ### USER QUESTION:
-# {{$user_query}}
-
-# ### INSTRUCTIONS:
-# 1. Answer the user's question using ONLY the provided semantic graph map.
-# 2. If the answer cannot be confidently derived from the context, state clearly that the information is not present in the current graph.
-# 3. Be highly specific. Reference exact class names, function names, and file paths when explaining how data flows or how components interact.
-# 4. Keep your explanation concise and technical.
+# File: {batch_data['file_path']}
+# Code:
+# {batch_data['raw_code']}
 # """

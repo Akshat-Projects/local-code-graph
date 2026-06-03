@@ -1,3 +1,4 @@
+import os
 import uuid
 import re
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -6,6 +7,8 @@ from typing import Any, Dict
 from pathlib import Path
 import networkx as nx
 import textwrap
+import igraph as ig
+import leidenalg
 
 from core.librarian import Librarian
 from core.ast_parser import CodebaseASTParser
@@ -23,6 +26,20 @@ router = APIRouter(prefix="/api/v1/ingest", tags=["Ingestion"])
 # --- In-Memory Job Queue ---
 # Stores the status of background ingestion tasks
 JOB_STORE: Dict[str, Dict[str, Any]] = {}
+
+
+
+def assign_communities(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
+    # Convert networkx → igraph
+    ig_graph = ig.Graph.from_networkx(G.to_undirected())
+    partition = leidenalg.find_partition(
+        ig_graph, 
+        leidenalg.ModularityVertexPartition
+    )
+    # Write community ID back to each node
+    for i, node_id in enumerate(G.nodes()):
+        G.nodes[node_id]["community"] = partition.membership[i]
+    return G
 
 
 async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
@@ -94,6 +111,23 @@ async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
         # Pass the callback so the backend can talk to the Streamlit UI!
         await analyst.analyze_and_update(progress_callback=update_ui_progress)
         
+        logger.info("Assigning Leiden communities for visualization...")
+        try:
+            librarian.graph = assign_communities(librarian.graph)
+            librarian.save_graph() # Persist the community data to disk
+            logger.info("Community assignment complete.")
+        except Exception as e:
+            logger.warning(f"Community clustering failed, continuing without it: {e}")
+        # ==========================================
+        
+        # Mark Job as Successful
+        JOB_STORE[job_id] = {
+            "status": "completed",
+            "message": "Graph enriched and saved successfully.",
+            "details": {"files_modified": len(modified_files), "progress_percent": 100}
+        }
+        logger.info(f"Job {job_id} completed successfully.")
+        
         # Mark Job as Successful
         JOB_STORE[job_id] = {
             "status": "completed",
@@ -159,11 +193,28 @@ async def get_job_status(job_id: str):
     
 
 @router.get("/visualize/{repo_name}")
-async def get_graph_visualization(repo_name: str):
+async def get_graph_visualization(
+    repo_name: str,
+    target_path: str | None = None
+):
     """Returns the graph data formatted for vis.js / streamlit-agraph."""
     
-    temp_librarian = Librarian(workspace_root=".", repo_name=repo_name)
-    graph_path = Path(temp_librarian.graph_path)
+    # 1. Get the absolute path to the root of your Python project
+    project_root = os.getcwd() 
+    
+    # 2. Let your awesome Librarian securely resolve the path!
+    workspace_root = project_root
+    if target_path:
+        try:
+            target_dir = validate_ingestion_path(target_path)
+            potential_path = target_dir / ".localgraph" / "storage" / repo_name / "graph.graphml"
+            if potential_path.exists():
+                workspace_root = str(target_dir)
+        except Exception as e:
+            logger.warning(f"Failed to validate target_path for visualization: {e}")
+            
+    temp_librarian = Librarian(workspace_root=workspace_root, repo_name=repo_name)
+    graph_path = temp_librarian.graph_path
     
     if not graph_path.exists():
         logger.error(f"❌ VISUALIZER ERROR: Graph file not found at {graph_path.absolute()}")
@@ -171,6 +222,7 @@ async def get_graph_visualization(repo_name: str):
         
     try:
         G = nx.read_graphml(graph_path, node_type=str) 
+        print(graph_path)
         
         nodes = []
         edges = []
@@ -178,7 +230,10 @@ async def get_graph_visualization(repo_name: str):
         # Collect unique file groups to assign colors using Tableau 10 palette
         unique_groups = sorted(list(set(str(nid).split("::")[0] for nid in G.nodes())))
         tableau10 = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC"]
-        group_colors = {group: tableau10[i % len(tableau10)] for i, group in enumerate(unique_groups)}
+        # group_colors = {group: tableau10[i % len(tableau10)] for i, group in enumerate(unique_groups)}
+        
+        nodes = []
+        edges = []
         
         # Format Nodes
         for node_id, data in G.nodes(data=True):
@@ -188,29 +243,42 @@ async def get_graph_visualization(repo_name: str):
             file_group = parts[0] 
             label = parts[-1]
             
-            # 1. Color node based on its file group (clustering by module)
-            color = group_colors.get(file_group, "#E2E8F0")
-            
-            # 2. Scale node size dynamically based on degree (hubness) and node type
+            # 1. Scale node size AND MASS dynamically based on degree (hubness)
             degree = G.degree(node_id)
+
+            base_size = 10 + (degree * 1.6)
+            size = min(base_size, 40)       # cap at 40, graphify caps at 40 too
+            shape = "dot"
+            mass = 1 + (degree * 0.1)
+            
             if node_type == "file":
-                size = 32 + min(degree * 2, 20)
-                font_size = 11
+                # Files max out at size 25 (instead of 40)
+                size = 10 + min(degree * 0.8, 13) 
+                font_size = 11 if degree >= 2 else 0
                 font_color = "#E2E8F0"
-                shape = "hexagon"
-                mass = 6
+                shape = "dot"
+                mass = 3 + (degree * 0.1) 
             elif node_type == "class":
-                size = 18 + min(degree * 1.5, 12)
-                font_size = 9
+                size = 7 + min(degree * 0.8, 7)
+                font_size = 9 if degree >= 2 else 0
                 font_color = "#CBD5E0"
                 shape = "dot"
                 mass = 2
             else: # function/method
-                size = 10 + min(degree * 1, 8)
-                font_size = 0  # Hide labels of small methods/functions to prevent screen clutter
+                # Functions become tiny, clean dots
+                size = 5 + min(degree * 0.5, 4)
+                font_size = 0  # Strictly no labels for methods
                 font_color = "#A0AEC0"
                 shape = "dot"
                 mass = 1
+
+            # Show labels only on high-degree nodes
+            if degree >= 2:
+                font_size = 12
+                font_color = "#ffffff"
+            else:
+                font_size = 6
+                font_color = "#ffffff"
             
             # Smart Tooltips
             summary = data.get("summary", "").strip()
@@ -227,58 +295,25 @@ async def get_graph_visualization(repo_name: str):
                 
             wrapped_title = textwrap.fill(raw_title, width=60)
             
+            # --- USE ALGORITHMIC COMMUNITIES ---
+            community_id = data.get("community", file_group)
+            
             nodes.append({
                 "id": str(node_id),
-                "label": label,       # truncated display label
+                "label": label,
                 "title": wrapped_title,
                 "summary": wrapped_title,
-                "group": file_group,
                 "type": node_type,  
                 "shape": shape,
-                "color": color,
                 "size": size,
                 "mass": mass,
-                "font": {"size": font_size, "color": font_color},  # hide labels for methods by default
+                "group": str(community_id), # Let vis.js auto-color based entirely on community!
+                "font": {"size": font_size, "color": font_color},
             })
-        
-        # # Format Nodes
-        # for node_id, data in G.nodes(data=True):
-        #     node_type = data.get("type", "unknown")
-        #     label = str(node_id).split("::")[-1]
-            
-        #     # 1. Color-code based on entity type
-        #     color = "#E2E8F0"
-        #     if node_type == "class": color = "#F6AD55"
-        #     elif node_type == "function": color = "#68D391"
-        #     elif node_type == "file": color = "#63B3ED"
-            
-        #     # 2. FIX: Smart Tooltips (Titles)
-        #     summary = data.get("summary", "").strip()
-        #     if not summary or summary == "No summary available.":
-        #         if node_type == "file":
-        #             raw_title = f"📄 Source File: {label}"
-        #         elif node_type == "class":
-        #             raw_title = f"📦 Class: {label}"
-        #         else:
-        #             raw_title = f"⚙️ Function: {label}"
-        #     else:
-        #         raw_title = summary
-                
-        #     # Breaks the text into multiple lines every ~60 characters
-        #     wrapped_title = textwrap.fill(raw_title, width=60)
-            
-        #     nodes.append({
-        #         "id": str(node_id),
-        #         "label": label,
-        #         "title": wrapped_title,
-        #         "color": color,
-        #         "size": 45 if node_type == "file" else 18 if node_type == "class" else 12,
-        #         "mass": 8 if node_type == "file" else 1
-        #     })
             
         # Format Edges
         for source, target, data in G.edges(data=True):
-            relation = data.get("relation", "")
+            # relation = data.get("relation", "")
             
             # 3. FIX: Hide visually obvious structural labels to reduce clutter
             # We keep valuable semantic labels like "calls", "inherits", or "instantiates"
