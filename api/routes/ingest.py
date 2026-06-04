@@ -42,7 +42,7 @@ def assign_communities(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
     return G
 
 
-async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
+async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str, target_path: str):
     """The background worker that updates the global JOB_STORE dictionary."""
     JOB_STORE[job_id] = {"status": "processing", "details": {}}
     logger.info(f"Job {job_id} started processing for repo: {repo_name}")
@@ -102,15 +102,21 @@ async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
                 "progress_percent": int((current / total) * 100) if total > 0 else 0,
                 "current_file": status_message
             }
-            
-        # Phase 2: LLM Semantic Analysis
-        analyst = GraphAnalyst(
-            librarian=librarian, 
-            target_repo_path=target_path,
-            modified_files=modified_files)
-        # Pass the callback so the backend can talk to the Streamlit UI!
-        await analyst.analyze_and_update(progress_callback=update_ui_progress)
         
+        # Phase 2: LLM Semantic Analysis
+        if req.run_llm:
+            update_progress(current=50, total=100, status_message="Running Deep LLM Analysis....", job_id=job_id)
+            
+
+            analyst = GraphAnalyst(
+                librarian=librarian, 
+                target_repo_path=target_path,
+                modified_files=modified_files)
+            # Pass the callback so the backend can talk to the Streamlit UI!
+            await analyst.analyze_and_update(progress_callback=update_ui_progress)
+        else:
+            update_progress(current=100, total=100, status_message="Skipping LLM Ingestion...", job_id=job_id)
+            
         logger.info("Assigning Leiden communities for visualization...")
         try:
             librarian.graph = assign_communities(librarian.graph)
@@ -127,16 +133,8 @@ async def run_ingestion_pipeline(job_id: str, repo_name: str, target_path: str):
             "details": {"files_modified": len(modified_files), "progress_percent": 100}
         }
         logger.info(f"Job {job_id} completed successfully.")
-        
-        # Mark Job as Successful
-        JOB_STORE[job_id] = {
-            "status": "completed",
-            "message": "Graph enriched and saved successfully.",
-            "details": {"files_modified": len(modified_files), "progress_percent": 100}
-        }
-        logger.info(f"Job {job_id} completed successfully.")
-        
-        
+            
+            
     except Exception as e:
         # Mark Job as Failed and capture the exact error!
         error_msg = str(e)
@@ -162,7 +160,8 @@ async def trigger_ingestion(request: IngestRequest, background_tasks: Background
     
     # Fire off the worker
     background_tasks.add_task(
-        run_ingestion_pipeline, 
+        run_ingestion_pipeline,
+        request, 
         job_id, 
         request.repo_name, 
         str(target_dir)
@@ -228,8 +227,8 @@ async def get_graph_visualization(
         edges = []
         
         # Collect unique file groups to assign colors using Tableau 10 palette
-        unique_groups = sorted(list(set(str(nid).split("::")[0] for nid in G.nodes())))
-        tableau10 = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC"]
+        # unique_groups = sorted(list(set(str(nid).split("::")[0] for nid in G.nodes())))
+        # tableau10 = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC"]
         # group_colors = {group: tableau10[i % len(tableau10)] for i, group in enumerate(unique_groups)}
         
         nodes = []
@@ -253,37 +252,39 @@ async def get_graph_visualization(
             
             if node_type == "file":
                 # Files max out at size 25 (instead of 40)
-                size = 10 + min(degree * 0.8, 13) 
+                size = 20 + min(degree * 0.8, 13) 
                 font_size = 11 if degree >= 2 else 0
                 font_color = "#E2E8F0"
                 shape = "dot"
                 mass = 3 + (degree * 0.1) 
             elif node_type == "class":
-                size = 7 + min(degree * 0.8, 7)
+                size = 14 + min(degree * 0.8, 7)
                 font_size = 9 if degree >= 2 else 0
                 font_color = "#CBD5E0"
                 shape = "dot"
                 mass = 2
             else: # function/method
                 # Functions become tiny, clean dots
-                size = 5 + min(degree * 0.5, 4)
+                size = 10 + min(degree * 0.5, 4)
                 font_size = 0  # Strictly no labels for methods
                 font_color = "#A0AEC0"
                 shape = "dot"
                 mass = 1
 
             # Show labels only on high-degree nodes
-            if degree >= 2:
+            if degree >= 10:
                 font_size = 12
                 font_color = "#ffffff"
             else:
-                font_size = 6
+                font_size = 10
                 font_color = "#ffffff"
             
             # Smart Tooltips
             summary = data.get("summary", "").strip()
             summary = re.sub(r"<[^>]+>", "", summary).strip()
+            is_pending = False
             if not summary or summary == "No summary available.":
+                is_pending = True
                 if node_type == "file":
                     raw_title = f"📄 Source File: {label}"
                 elif node_type == "class":
@@ -309,6 +310,7 @@ async def get_graph_visualization(
                 "mass": mass,
                 "group": str(community_id), # Let vis.js auto-color based entirely on community!
                 "font": {"size": font_size, "color": font_color},
+                "_is_pending": is_pending
             })
             
         # Format Edges

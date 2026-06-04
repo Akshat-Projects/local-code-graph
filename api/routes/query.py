@@ -1,3 +1,4 @@
+import re
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pathlib import Path
@@ -66,10 +67,24 @@ async def chat_with_node(repo_name: str, req: NodeChatRequest):
     # 2. Extract context for the LLM
     node_data = G.nodes[req.node_id]
     node_type = node_data.get("type", "unknown")
-    raw_code = node_data.get("code", "")
+    raw_code = "Code not found in memory."
     summary = node_data.get("summary", "No summary available.")
     
     logger.info(f"Chat request for {req.node_id}: {req.question}")
+    
+    if req.target_path:
+        # Node IDs are usually formatted like "path/to/file.py::ClassName::method" or "path/to/file.py"
+        # We split by "::" to get just the file path!
+        file_rel_path = req.node_id.split("::")[0]
+        full_file_path = Path(req.target_path) / file_rel_path
+        
+        try:
+            if full_file_path.exists() and full_file_path.is_file():
+                # Read the actual file directly from the hard drive!
+                with open(full_file_path, "r", encoding="utf-8") as f:
+                    raw_code = f.read()
+        except Exception as e:
+            logger.warning(f"Could not read live code for {req.node_id}: {e}")
     
     # 3. The Real LLM Integration
     prompt = f"""
@@ -103,3 +118,47 @@ async def chat_with_node(repo_name: str, req: NodeChatRequest):
                 
     # Return a raw text stream instead of a JSON dictionary
     return StreamingResponse(generate(), media_type="text/plain")
+
+
+
+@router.get("/status/{repo_name}")
+async def get_graph_status(repo_name: str):
+    """Unified endpoint to calculate graph health and pending summaries."""
+    temp_librarian = Librarian(workspace_root=".", repo_name=repo_name)
+    graph_path = Path(temp_librarian.graph_path)
+    
+    if not graph_path.exists():
+        return {
+            "exists": False,
+            "total_nodes": 0,
+            "pending_summaries": 0,
+            "is_complete": False
+        }
+        
+    try:
+        G = nx.read_graphml(graph_path, node_type=str)
+        total_nodes = len(G.nodes)
+        pending_summaries = 0
+        
+        for _, data in G.nodes(data=True):
+            summary = data.get("summary", "").strip()
+            summary = re.sub(r"<[^>]+>", "", summary).strip()
+            
+            if not summary or summary == "No summary available.":
+                pending_summaries += 1
+                
+        return {
+            "exists": True,
+            "total_nodes": total_nodes,
+            "pending_summaries": pending_summaries,
+            "is_complete": pending_summaries == 0
+        }
+    except Exception as e:
+        logger.error(f"Failed to calculate graph status for {repo_name}: {e}")
+        return {
+            "exists": True,
+            "total_nodes": 0,
+            "pending_summaries": 0,
+            "is_complete": False,
+            "error": str(e)
+        }

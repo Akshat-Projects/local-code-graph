@@ -46,3 +46,7 @@ class NodeChatRequest(BaseModel):
         ...,
         description="Question asked by user regarding the node."
     )
+    target_path: str = Field(
+        ..., 
+        description="Provides target path to LLM to get to code"
+    )

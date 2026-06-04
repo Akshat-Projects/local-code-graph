@@ -24,6 +24,12 @@ class IngestRequest(BaseModel):
         description="Absolute path to the repository",
         examples=["//home//akshat_ubuntu//project//local-code-graph//my_mock_test"]
     )
+    
+    run_llm: bool = Field(
+        ...,
+        description="If turned on LLM summary will be generated.",
+        examples=[False]
+    )
 
 
 class JobStatusResponse(BaseModel):
