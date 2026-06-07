@@ -54,9 +54,6 @@ class ContextAssembler:
                     method_nodes.extend(self.graph.successors(node))
             internal_nodes.extend(method_nodes)
             
-            if not internal_nodes:
-                continue # Skip empty files
-                
             # 3. Read the raw source code
             try:
                 with open(absolute_path, "r", encoding="utf-8") as f:

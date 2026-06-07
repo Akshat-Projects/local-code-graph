@@ -106,35 +106,3 @@ class Librarian:
             }
                 
         return file_manifest
-    # def scan_repository(self, target_repo_path: str, valid_files: list[Path] = None) -> dict:
-    #     """
-    #     Walks the codebase, filters out non-relevant files, and classifies 
-    #     files into 'modified' (needs parsing) or 'unchanged' states.
-    #     """
-    #     ignored_dirs = {'.git', 'venv', '__pycache__', '.localgraph', 'data', 'llmhost'}
-    #     file_manifest = {}
-        
-    #     for root, dirs, files in os.walk(target_repo_path):
-    #         # Prune directory tree in-place to avoid wandering into deep data/env dependencies
-    #         dirs[:] = [d for d in dirs if d not in ignored_dirs]
-            
-    #         for file in files:
-    #             if file.endswith(".py"):
-    #                 full_path = os.path.join(root, file)
-    #                 relative_path = os.path.relpath(full_path, target_repo_path)
-                    
-    #                 current_hash = self.calculate_file_hash(full_path)
-                    
-    #                 # Read the historical hash directly out of the graph's file nodes if it exists
-    #                 file_node_id = f"file::{relative_path}"
-    #                 old_hash = self.graph.nodes.get(file_node_id, {}).get("hash", "")
-                    
-    #                 status = "modified" if current_hash != old_hash else "unchanged"
-                    
-    #                 file_manifest[relative_path] = {
-    #                     "absolute_path": full_path,
-    #                     "hash": current_hash,
-    #                     "status": status
-    #                 }
-                    
-    #     return file_manifest

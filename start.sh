@@ -35,7 +35,7 @@ echo "[1/3] Booting Gemma 4 (llama-server)..."
   --jinja \
   --pooling rank \
   --reasoning-budget 2048 \
-  --chat-template-kwargs '{"enable_thinking":true}') &
+  --reasoning off) &
 
 # (cd ~/llama.cpp/build && ./bin/llama-server -m ~/llmhost/model/gemma-4-E4B-it-Q4_K_M.gguf -ngl 999 -c 131072 -fa on -ctk q4_0 -ctv q4_0 --host 0.0.0.0 --port 8080 --jinja --pooling rank) &
 LLM_PID=$!

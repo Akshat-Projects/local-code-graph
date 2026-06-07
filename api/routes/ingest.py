@@ -28,7 +28,6 @@ router = APIRouter(prefix="/api/v1/ingest", tags=["Ingestion"])
 JOB_STORE: Dict[str, Dict[str, Any]] = {}
 
 
-
 def assign_communities(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
     # Convert networkx → igraph
     ig_graph = ig.Graph.from_networkx(G.to_undirected())
@@ -36,10 +35,24 @@ def assign_communities(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
         ig_graph, 
         leidenalg.ModularityVertexPartition
     )
-    # Write community ID back to each node
-    for i, node_id in enumerate(G.nodes()):
-        G.nodes[node_id]["community"] = partition.membership[i]
+    
+    # Write community ID back to each node using the deterministic _nx_name
+    for vertex in ig_graph.vs:
+        nx_node_id = vertex["_nx_name"]
+        G.nodes[nx_node_id]["community"] = partition.membership[vertex.index]
+        
     return G
+# def assign_communities(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
+#     # Convert networkx → igraph
+#     ig_graph = ig.Graph.from_networkx(G.to_undirected())
+#     partition = leidenalg.find_partition(
+#         ig_graph, 
+#         leidenalg.ModularityVertexPartition
+#     )
+#     # Write community ID back to each node
+#     for i, node_id in enumerate(G.nodes()):
+#         G.nodes[node_id]["community"] = partition.membership[i]
+#     return G
 
 
 async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str, target_path: str):
@@ -89,7 +102,23 @@ async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str
                 modified_files.add(rel_path)
                 parser.parse_file(file_meta["absolute_path"], rel_path, file_meta["hash"])
                 
-                # modified_count += 1
+        # --- ORPHAN PRUNING ---
+        logger.info("Pruning external library calls from the graph...")
+        real_names = set()
+        for node_id, data in librarian.graph.nodes(data=True):
+            if data.get("type") in ["file", "class", "function"]:
+                exact_name = str(node_id).split("::")[-1]
+                real_names.add(exact_name)
+                if data.get("type") == "file":
+                    real_names.add(exact_name.replace(".py", ""))
+
+        nodes_to_remove = [
+            n for n, d in librarian.graph.nodes(data=True) 
+            if str(n).startswith("fuzzy::") and str(n).replace("fuzzy::", "") not in real_names
+        ]
+        for n in nodes_to_remove:
+            librarian.graph.remove_node(n)
+        logger.info(f"Removed {len(nodes_to_remove)} external/unresolved fuzzy calls.")
                 
         # if modified_count > 0:
         librarian.save_graph()
@@ -222,14 +251,6 @@ async def get_graph_visualization(
     try:
         G = nx.read_graphml(graph_path, node_type=str) 
         print(graph_path)
-        
-        nodes = []
-        edges = []
-        
-        # Collect unique file groups to assign colors using Tableau 10 palette
-        # unique_groups = sorted(list(set(str(nid).split("::")[0] for nid in G.nodes())))
-        # tableau10 = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC"]
-        # group_colors = {group: tableau10[i % len(tableau10)] for i, group in enumerate(unique_groups)}
         
         nodes = []
         edges = []

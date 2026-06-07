@@ -74,8 +74,12 @@ async def chat_with_node(repo_name: str, req: NodeChatRequest):
     
     if req.target_path:
         # Node IDs are usually formatted like "path/to/file.py::ClassName::method" or "path/to/file.py"
-        # We split by "::" to get just the file path!
-        file_rel_path = req.node_id.split("::")[0]
+        # We split by "::" to get just the file path, or strip the "file::" prefix.
+        node_id_str = req.node_id
+        if node_id_str.startswith("file::"):
+            file_rel_path = node_id_str[6:]
+        else:
+            file_rel_path = node_id_str.split("::")[0]
         full_file_path = Path(req.target_path) / file_rel_path
         
         try:

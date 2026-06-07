@@ -138,7 +138,7 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     const edgesDS = new vis.DataSet(RAW_EDGES.map((e, i) => ({
         id: i, from: e.from, to: e.to, label: e.label,
         width: e.width, color: e.color,
-        arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+        arrows: { to: { enabled: true, scaleFactor: 1 } },
     })));
 
     const container = document.getElementById('graph');
