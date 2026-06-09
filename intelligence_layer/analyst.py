@@ -121,15 +121,26 @@ class GraphAnalyst:
             # Only summarize if it doesn't already have one
             if not file_node_data.get("summary") or file_node_data.get("summary") == "No summary available.":
                 logger.info(f"Generating architectural summary for file: {batch_data['file_path']}")
-               
-                # Direct, simple prompt for the file overview (Cleaned up for IDE compatibility)
-                file_prompt = f"""You are a Senior Software Architect. Read the following Python file and write
-                a highly concise, 2-3 sentence summary of its overarching purpose, what it is responsible for,
-                and its role in the broader architecture. Do NOT output JSON, just the raw text summary.
+                
+                if batch_data["is_spaghetti"]:
+                    file_prompt = f"""You are a Senior Software Architect analyzing an unstructured, procedural script.
+                        Read the following Python file and write a highly concise, 2-3 sentence summary of its 
+                        execution flow, core data transformations, and side-effects. 
+                        Append a list of 5-7 important keywords/tags that will be useful for semantic vector search.
+                        Do NOT output JSON, just the raw text summary.
 
-                File: {batch_data['file_path']}
-                Code:
-                {batch_data['raw_code']}
+                        File: {batch_data['file_path']}
+                        Code:
+                        {batch_data['raw_code']}"""
+                else:                   
+                    # Direct, simple prompt for the file overview (Cleaned up for IDE compatibility)
+                    file_prompt = f"""You are a Senior Software Architect. Read the following Python file and write
+                    a highly concise, 2-3 sentence summary of its overarching purpose, what it is responsible for,
+                    and its role in the broader architecture. Do NOT output JSON, just the raw text summary.
+
+                    File: {batch_data['file_path']}
+                    Code:
+                    {batch_data['raw_code']}
                 """
                 try:
                     # Execute Inference for the File summary
