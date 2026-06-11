@@ -29,6 +29,7 @@ class QueryRequest(BaseModel):
         ...,
         description="Target code location will be provided to LLM to provide relevant results."
     )
+    chat_history: Optional[str] = ""
 
 class QueryResponse(BaseModel):
     answer: str = Field(

@@ -2,6 +2,9 @@ import os
 from openai import AsyncOpenAI
 from semantic_kernel import Kernel
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
+from semantic_kernel.functions import kernel_function
+from typing import Annotated
+
 from config import settings
 from utils.logger import get_logger
 
@@ -48,6 +51,27 @@ class LocalKernelFactory:
         
         logger.info(f"Semantic Kernel initialized. Routing to local engine at {local_endpoint}")
         return kernel
+    
+    
+
+
+class CodebaseSearchPlugin:
+    def __init__(self, engine_instance):
+        self.engine = engine_instance
+
+    @kernel_function(
+        name="search_codebase",
+        description="""Searches the local codebase graph for architectural context, code snippets, and structural relationships.
+                        ALWAYS use this tool if the user asks about how the code works, where things are, or specific algorithms."""
+    )
+    async def search_codebase(
+        self,
+        query: Annotated[str, "The search query to find relevant code context in the codebase."]
+    ) -> Annotated[str, "The retrieved codebase context"]:
+        
+        logger.info(f"[AGENT] LLM autonomously called search_codebase for: '{query}'")
+        # Call your existing powerhouse function!
+        return await self.engine._build_context_payload(user_query=query, chat_history="")
 
 # Quick test execution
 if __name__ == "__main__":

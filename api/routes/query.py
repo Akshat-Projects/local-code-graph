@@ -20,6 +20,8 @@ async def ask_codebase(request: QueryRequest):
     Submits a natural language question and streams the answer back.
     """
     logger.info(f"Received streaming query for repo: {request.repo_name}")
+    logger.info(f"Received Chat History Length: {len(request.chat_history)} characters") 
+    
     target_dir = validate_ingestion_path(
             request.target_path
         )
@@ -27,13 +29,14 @@ async def ask_codebase(request: QueryRequest):
         engine = GraphQueryEngine(
             # target_repo_path=request.target_path,
             repo_name=request.repo_name,
-            target_repo_path=str(target_dir)
+            target_repo_path=str(target_dir),
             )
         
         # Grab the async generator
         response_generator = engine.answer_question_stream(
             user_query=request.question, 
-            max_tokens=request.max_tokens
+            max_tokens=request.max_tokens,
+            chat_history=request.chat_history
             )
         
         # Stream the chunks down the HTTP connection as plain text
