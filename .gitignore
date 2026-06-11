@@ -3,6 +3,10 @@ logs
 .agents
 .localgraph
 graphify-out
+data
+my_mock_test
+gemma_meta*
+gguf_inspect.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

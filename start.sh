@@ -23,19 +23,34 @@ trap cleanup SIGINT
 # Note: reasoning-budget is set to 2048 to avoid endless thinking loops. 
 # You can change it to -1 to give the model completely free rein.
 echo "[1/3] Booting Gemma 4 (llama-server)..."
+# (cd ~/llama.cpp/build && ./bin/llama-server \
+#   -m ~/llmhost/model/gemma-4-E4B-it-UD-Q4_K_XL.gguf \
+#   -md /home/akshat_ubuntu/llmhost/model/gemma-4-E4B-it-Q8_0-MTP.gguf \
+#   --spec-type draft-mtp \
+#   --spec-draft-n-max 2 \
+#   -fit off \
+#   -ngl 999 \
+#   -c 32768 \
+#   -fa on \
+#   --no-warmup \
+#   -ctk q8_0 \
+#   -ctv q8_0 ) &
+
+  #   -fa off\
 (cd ~/llama.cpp/build && ./bin/llama-server \
   -m ~/llmhost/model/gemma-4-E4B-it-Q4_K_M.gguf \
   -ngl 999 \
   -c 131072 \
   -fa on \
-  -ctk q4_0 \
-  -ctv q4_0 \
+  -b 2048 \
+  -ub 512 \
+  -np 4 \
+  -ctk q8_0 \
+  -ctv q8_0 \
   --host 0.0.0.0 \
-  --port 8080 \
-  --jinja \
-  --pooling rank \
-  --reasoning-budget 2048 \
-  --reasoning off) &
+  --port 8080 ) &
+  # --reasoning-budget 2048 \
+  # --reasoning on) &
 
 # (cd ~/llama.cpp/build && ./bin/llama-server -m ~/llmhost/model/gemma-4-E4B-it-Q4_K_M.gguf -ngl 999 -c 131072 -fa on -ctk q4_0 -ctv q4_0 --host 0.0.0.0 --port 8080 --jinja --pooling rank) &
 LLM_PID=$!

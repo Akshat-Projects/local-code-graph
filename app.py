@@ -174,13 +174,14 @@ st.caption(f"Currently querying isolated graph database: **{st.session_state.act
 tab_chat, tab_map = st.tabs(["💬 AI Assistant", "🕸️ Interactive Architecture Map"])
 
 # --- Helper: Advanced Streaming Generator ---
-def stream_llm_response(repo_name: str, question: str, max_tokens: int, target_path: str):
+def stream_llm_response(repo_name: str, question: str, max_tokens: int, target_path: str, chat_history: str):
     """Streams text, telemetry, and natively parsed reasoning API fields."""
     payload = {
         "repo_name": repo_name, 
         "question": question, 
         "max_tokens": max_tokens if max_tokens > 0 else None,
-        "target_path": target_path
+        "target_path": target_path,
+        "chat_history": chat_history
     }
     try:
         with requests.post(f"{API_BASE}/query", json=payload, stream=True) as response:
@@ -387,6 +388,18 @@ def render_graph_health_banner(repo_name: str, layout_context: str = "visualizer
         st.sidebar.error(f"Could not connect to health engine: {e}")
     return False
 
+
+@st.dialog("Expanded Node Chatbot", width="large")
+def expanded_chat_modal():
+    # Render the chat history specifically for the node
+    for msg in st.session_state.get("node_messages", []):
+        st.chat_message(msg["role"]).write(msg["content"])
+        
+    # Put a chat input directly inside the modal
+    if prompt := st.chat_input("Ask about this node..."):
+        # Handle your user input and API call here, just like you do in the sidebar
+        st.write(f"You asked: {prompt}")
+
 # ==========================================
 # TAB 1: CHAT INTERFACE & RENDER LOOP
 # ==========================================
@@ -431,6 +444,11 @@ with tab_chat:
                     "content": "⚠️ Codebase ingestion is currently running. "
                                "This response may use a partially updated graph."
                 })
+                
+            # 2. BUNDLE THE CHAT HISTORY
+            # Grab the last 6 messages (excluding the current one) to send as context
+            history_msgs = st.session_state.messages[:-1] 
+            formatted_history = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in history_msgs])
 
             with st.chat_message("assistant"):
                 thought_container = st.status("💭 Thinking...", expanded=True)
@@ -441,7 +459,10 @@ with tab_chat:
                 is_thinking = False
 
                 for event_type, chunk in stream_llm_response(
-                    st.session_state.active_repo, prompt, max_tokens_val, st.session_state.target_path
+                    repo_name=st.session_state.active_repo,
+                    question=prompt, max_tokens=max_tokens_val, 
+                    target_path=st.session_state.target_path,
+                    chat_history=formatted_history 
                 ):
                     if event_type == "thought":
                         is_thinking = True
@@ -545,22 +566,7 @@ with tab_map:
                             "label": f"Community {cid}", 
                             "count": count
                         })
-                    
-                    # # --- NEW: GLOBAL GRAPH HEALTH INDICATOR ---
-                    # pending_count = sum(1 for n in vis_nodes if n.get("_is_pending", False))
-                    # total_count = len(vis_nodes)
-                    
-                    # if pending_count > 0:
-                    #     st.warning(
-                    #         f"⚠️ **{pending_count} / {total_count} nodes are pending LLM Summarization.**\n\n"
-                    #         "The graph is structurally complete, but missing semantic context. "
-                    #         "Go to the Ingestion tab and run with **'Run Deep LLM Analysis'** checked to fill in the missing details."
-                    #         "LLM analysis will improve the resulting output."
-                    #     )
-                    # else:
-                    #     st.success(f"✅ Graph is 100% structurally and semantically complete! ({total_count} nodes)")
-                        
-                    # --- THE DRY WARNING BANNER (Replaces old manual count code!) ---
+ 
                     render_graph_health_banner(st.session_state.active_repo, layout_context="visualizer")
                     
                     js_nodes = json.dumps(vis_nodes)
@@ -587,18 +593,9 @@ with tab_map:
                         """
 
 
-                    # custom_html = html_head + js_data + js_logic + html_foot
                     custom_html = get_graph_html(API_BASE, st.session_state.active_repo, st.session_state.target_path, js_nodes, js_edges, js_legend, js_physics_config)
                     components.html(custom_html, height=800, scrolling=False)
-                    # html_foot = """
-                    # </script>
-                    # </body>
-                    # </html>
-                    # """
-                    
-                    # custom_html = html_head + js_data + js_logic + html_foot
-                    # components.html(custom_html, height=800, scrolling=False)
-                    # st.html(custom_html)
+ 
                     
             except Exception as e:
                 st.error(f"Failed to connect to API: {e}")

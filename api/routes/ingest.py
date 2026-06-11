@@ -11,6 +11,7 @@ import igraph as ig
 import leidenalg
 
 from core.librarian import Librarian
+from core.vector_operations import HybridVectorStore
 from core.ast_parser import CodebaseASTParser
 from intelligence_layer.analyst import GraphAnalyst
 from utils.helper import validate_ingestion_path
@@ -154,7 +155,25 @@ async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str
         except Exception as e:
             logger.warning(f"Community clustering failed, continuing without it: {e}")
         # ==========================================
+        # --- POPULATE THE DUAL-INDEX STORE ---
+        # ==========================================
         
+        logger.info("Building Hybrid FAISS/BM25 Indexes...")
+        nodes_data = []
+        for node_id, data in librarian.graph.nodes(data=True):
+            summary = data.get("summary", "")
+            # Only index nodes that actually have valid text
+            if summary and summary not in ["No summary available.", "pending"]:
+                nodes_data.append({"node_id": str(node_id), "summary": summary})
+                
+        if nodes_data:
+            vector_store = HybridVectorStore(repo_name)
+            vector_store.build_indexes(nodes_data)
+            logger.info("Hybrid indexing complete.")
+        else:
+            logger.warning("No valid summaries found to index.")     
+            
+               
         # Mark Job as Successful
         JOB_STORE[job_id] = {
             "status": "completed",
