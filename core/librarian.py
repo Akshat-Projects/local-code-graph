@@ -3,6 +3,8 @@ import hashlib
 import re
 import networkx as nx
 from pathlib import Path
+
+from utils.constants import AllowedTypes
 from utils.logger import get_logger
 
 logger = get_logger()
@@ -84,7 +86,7 @@ class Librarian:
         
         for file_path in files_to_scan:
             # We only want to parse Python files (preserving your original logic)
-            if file_path.suffix != ".py":
+            if file_path.suffix not in AllowedTypes.SUPPORTED_EXTENSIONS:
                 continue
                 
             # Convert Path objects to strings for compatibility with the rest of your app

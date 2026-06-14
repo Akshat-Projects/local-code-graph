@@ -15,3 +15,9 @@ class SecurityConstraints():
     "http://localhost:8000",
     "http://localhost:8501",
         ]
+    
+class AllowedTypes():
+    SUPPORTED_EXTENSIONS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", 
+    ".java", ".cpp", ".c", ".h", ".go", ".rs"
+        }

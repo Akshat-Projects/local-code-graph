@@ -38,13 +38,13 @@ echo "[1/3] Booting Gemma 4 (llama-server)..."
 
   #   -fa off\
 (cd ~/llama.cpp/build && ./bin/llama-server \
-  -m ~/llmhost/model/gemma-4-E4B-it-Q4_K_M.gguf \
+  -m ~/llmhost/model/gemma-4-E4B-it-UD-Q4_K_XL.gguf \
   -ngl 999 \
   -c 131072 \
   -fa on \
   -b 2048 \
   -ub 512 \
-  -np 4 \
+  -np 1 \
   -ctk q8_0 \
   -ctv q8_0 \
   --host 0.0.0.0 \

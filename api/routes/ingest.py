@@ -43,17 +43,6 @@ def assign_communities(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
         G.nodes[nx_node_id]["community"] = partition.membership[vertex.index]
         
     return G
-# def assign_communities(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
-#     # Convert networkx → igraph
-#     ig_graph = ig.Graph.from_networkx(G.to_undirected())
-#     partition = leidenalg.find_partition(
-#         ig_graph, 
-#         leidenalg.ModularityVertexPartition
-#     )
-#     # Write community ID back to each node
-#     for i, node_id in enumerate(G.nodes()):
-#         G.nodes[node_id]["community"] = partition.membership[i]
-#     return G
 
 
 async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str, target_path: str):

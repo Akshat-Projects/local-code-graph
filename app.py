@@ -5,6 +5,7 @@ import streamlit as st
 from config import settings
 from streamlit_autorefresh import st_autorefresh
 from streamlit_agraph import agraph, Node, Edge, Config
+from streamlit.components.v1 import html
 
 from ui.graph_template import get_graph_html
 
@@ -46,6 +47,10 @@ if "isolate_node" not in st.session_state:      # isolate mode toggle
     st.session_state.isolate_node = None
 if "prefill_prompt" not in st.session_state:
     st.session_state.prefill_prompt = None
+if "temp_thought" not in st.session_state:
+    st.session_state.temp_thought = ""
+if "temp_content" not in st.session_state:
+    st.session_state.temp_content = ""
 
 # ==========================================
 # SIDEBAR: CONTROL ROOM & TELEMETRY
@@ -400,17 +405,30 @@ def expanded_chat_modal():
         # Handle your user input and API call here, just like you do in the sidebar
         st.write(f"You asked: {prompt}")
 
+def stop_generation():
+    """Callback triggered instantly when 'Stop' is clicked."""
+    # Save whatever partial text was generated into the official history
+    st.session_state.messages.append({
+        "role": "assistant",
+        "thought": st.session_state.temp_thought,
+        "content": st.session_state.temp_content + "\n\n*(🛑 Stopped by User)*"
+    })
+    # Clear temps
+    st.session_state.temp_thought = ""
+    st.session_state.temp_content = ""
+
 # ==========================================
 # TAB 1: CHAT INTERFACE & RENDER LOOP
 # ==========================================
-with tab_chat:
-    # Drain prefill before anything else
-    prompt_to_run = None
-    if st.session_state.prefill_prompt:
-        prompt_to_run = st.session_state.prefill_prompt
-        st.session_state.prefill_prompt = None
 
-    if st.session_state.interruption_message:
+with tab_chat:
+    # 1. Handle prefill / Edit Button logic first
+    if st.session_state.get("prefill_prompt"):
+        st.session_state.messages.append({"role": "user", "content": st.session_state.prefill_prompt})
+        st.session_state.prefill_prompt = None
+        st.rerun()
+
+    if st.session_state.get("interruption_message"):
         st.session_state.messages.append({
             "role": "assistant",
             "content": st.session_state.interruption_message
@@ -420,85 +438,311 @@ with tab_chat:
     # --- THE DRY WARNING BANNER ---
     render_graph_health_banner(st.session_state.active_repo, layout_context="chatbot")
     
-    # Render history
-    for msg in st.session_state.messages:
+    # 2. Render all past messages (History)
+    for i, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
-            if msg.get("thought"):
-                with st.expander("💭 Thought Process", expanded=False):
-                    st.markdown(msg["thought"])
-            st.markdown(msg["content"])
+            if msg["role"] == "user":
+                col1, col2 = st.columns([0.95, 0.05])
+                with col1:
+                    st.markdown(msg["content"])
+                with col2:
+                    # Only show Edit button for the absolute last user message
+                    is_last_user = (i == len(st.session_state.messages) - 1) or \
+                                   (i == len(st.session_state.messages) - 2 and st.session_state.messages[-1]["role"] == "assistant")
+                    
+                    if is_last_user:
+                        if st.button("✏️", key=f"edit_{i}", help="Edit and resend this prompt"):
+                            st.session_state.prefill_prompt = msg["content"]
+                            st.session_state.messages = st.session_state.messages[:i]
+                            st.rerun()
+            else:
+                if msg.get("thought"):
+                    with st.expander("💭 Thought Process", expanded=False):
+                        st.markdown(msg["thought"])
+                st.markdown(msg["content"])
 
-    # Merge typed input and prefill into one variable
-    typed_prompt = st.chat_input("Ask a question about your codebase...")
-    prompt = typed_prompt or prompt_to_run   # ← prefill wins if nothing typed
-
-    if prompt:
-        st.session_state.is_generating = True
-        try:
-            st.chat_message("user").markdown(prompt)
-            st.session_state.messages.append({"role": "user", "content": prompt})
+    # 3. Generation Logic (Triggered ONLY if the last message in history is from the user)
+    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+        
+        with st.chat_message("assistant"):
+            top_col1, top_col2 = st.columns([0.85, 0.15])
             
-            if st.session_state.ingest_job_id:
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": "⚠️ Codebase ingestion is currently running. "
-                               "This response may use a partially updated graph."
-                })
-                
-            # 2. BUNDLE THE CHAT HISTORY
-            # Grab the last 6 messages (excluding the current one) to send as context
-            history_msgs = st.session_state.messages[:-1] 
-            formatted_history = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in history_msgs])
-
-            with st.chat_message("assistant"):
+            with top_col1:
                 thought_container = st.status("💭 Thinking...", expanded=True)
                 thought_placeholder = thought_container.empty()
-                thought_text = ""
-                answer_container = st.empty()
-                answer_text = ""
-                is_thinking = False
+            
+            with top_col2:
+                # The on_click callback saves the partial text BEFORE Streamlit reruns
+                st.button("🛑 Stop", key="stop_btn", on_click=stop_generation)
 
+            answer_container = st.empty()
+            is_thinking = False
+            
+            # Reset temp states for this specific generation run
+            st.session_state.temp_thought = ""
+            st.session_state.temp_content = ""
+
+            current_prompt = st.session_state.messages[-1]["content"]
+            history_msgs = st.session_state.messages[:-1] 
+            formatted_history = "\n".join([f"[{msg['role'].upper()}]: {msg['content']}" for msg in history_msgs])
+
+            try:
                 for event_type, chunk in stream_llm_response(
                     repo_name=st.session_state.active_repo,
-                    question=prompt, max_tokens=max_tokens_val, 
+                    question=current_prompt, 
+                    max_tokens=2048, 
                     target_path=st.session_state.target_path,
                     chat_history=formatted_history 
                 ):
                     if event_type == "thought":
                         is_thinking = True
-                        thought_text += chunk
-                        thought_placeholder.markdown(thought_text)
+                        st.session_state.temp_thought += chunk
+                        thought_placeholder.markdown(st.session_state.temp_thought)
+                        
                     elif event_type == "text":
                         if is_thinking:
                             thought_container.update(
                                 label="💭 Thought process complete", state="complete", expanded=False
                             )
                             is_thinking = False
-                        answer_text += chunk
-                        answer_container.markdown(answer_text)
+                        st.session_state.temp_content += chunk
+                        answer_container.markdown(st.session_state.temp_content)
+                        
                     elif event_type == "error":
                         st.error(chunk)
 
+                # If the loop finishes naturally without the user clicking stop
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "thought": thought_text if thought_text else None,
-                    "content": answer_text
+                    "thought": st.session_state.temp_thought,
+                    "content": st.session_state.temp_content
                 })
-        finally:
-            st.session_state.is_generating = False
+                st.session_state.temp_thought = ""
+                st.session_state.temp_content = ""
+                st.rerun() # Refresh UI one last time to remove the Stop button
+
+            except Exception as e:
+                # Catch sudden connection drops
+                pass
+
+    # 4. CHAT INPUT (Absolute bottom of the script = Absolute bottom of the UI)
+    if prompt := st.chat_input("Ask a question about your codebase..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.rerun() # Instantly trigger the generation block above
+# with tab_chat:
+#     # Drain prefill before anything else
+#     prompt_to_run = None
+#     if st.session_state.prefill_prompt:
+#         prompt_to_run = st.session_state.prefill_prompt
+#         st.session_state.prefill_prompt = None
+
+#     if st.session_state.interruption_message:
+#         st.session_state.messages.append({
+#             "role": "assistant",
+#             "content": st.session_state.interruption_message
+#         })
+#         st.session_state.interruption_message = None
+
+#     # --- THE DRY WARNING BANNER ---
+#     render_graph_health_banner(st.session_state.active_repo, layout_context="chatbot")
+    
+#     # Render history
+#     for msg in st.session_state.messages:
+#         with st.chat_message(msg["role"]):
+#             if msg.get("thought"):
+#                 with st.expander("💭 Thought Process", expanded=False):
+#                     st.markdown(msg["thought"])
+#             st.markdown(msg["content"])
+
+#     # Merge typed input and prefill into one variable
+#     typed_prompt = st.chat_input("Ask a question about your codebase...")
+#     prompt = typed_prompt or prompt_to_run   # ← prefill wins if nothing typed
+
+#     if prompt:
+#         st.session_state.is_generating = True
+#         try:
+#             st.chat_message("user").markdown(prompt)
+#             st.session_state.messages.append({"role": "user", "content": prompt})
+            
+#             if st.session_state.ingest_job_id:
+#                 st.session_state.messages.append({
+#                     "role": "assistant",
+#                     "content": "⚠️ Codebase ingestion is currently running. "
+#                                "This response may use a partially updated graph."
+#                 })
+                
+#             # 2. BUNDLE THE CHAT HISTORY
+#             # Grab the last 6 messages (excluding the current one) to send as context
+#             history_msgs = st.session_state.messages[:-1] 
+#             formatted_history = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in history_msgs])
+
+#             with st.chat_message("assistant"):
+#                 thought_container = st.status("💭 Thinking...", expanded=True)
+#                 thought_placeholder = thought_container.empty()
+#                 thought_text = ""
+#                 answer_container = st.empty()
+#                 answer_text = ""
+#                 is_thinking = False
+
+#                 for event_type, chunk in stream_llm_response(
+#                     repo_name=st.session_state.active_repo,
+#                     question=prompt, max_tokens=max_tokens_val, 
+#                     target_path=st.session_state.target_path,
+#                     chat_history=formatted_history 
+#                 ):
+#                     if event_type == "thought":
+#                         is_thinking = True
+#                         thought_text += chunk
+#                         thought_placeholder.markdown(thought_text)
+#                     elif event_type == "text":
+#                         if is_thinking:
+#                             thought_container.update(
+#                                 label="💭 Thought process complete", state="complete", expanded=False
+#                             )
+#                             is_thinking = False
+#                         answer_text += chunk
+#                         answer_container.markdown(answer_text)
+#                     elif event_type == "error":
+#                         st.error(chunk)
+
+#                 st.session_state.messages.append({
+#                     "role": "assistant",
+#                     "thought": thought_text if thought_text else None,
+#                     "content": answer_text
+#                 })
+#         finally:
+#             st.session_state.is_generating = False
 
 
 # ==========================================
 # TAB 2: INTERACTIVE ARCHITECTURE MAP
 # ==========================================
+
+# with tab_map:
+#     st.markdown("### Codebase Topography")
+#     st.caption("Explore the semantic relationships using the custom Graphify engine.")
+    
+#     layout_style = st.radio(
+#         "Select Graph Layout:",
+#         ["🌐 Organic (Physics)", "📂 Hierarchical (Tree)"],
+#         horizontal=True
+#     )
+    
+#     if st.button("🔄 Render Map", use_container_width=True):
+#         with st.spinner("Fetching topography from LocalGraph Engine..."):
+#             try:
+#                 res = requests.get(
+#                     f"{API_BASE}/ingest/visualize/{st.session_state.active_repo}",
+#                     params={"target_path": st.session_state.target_path}
+#                 )
+                
+#                 if res.status_code == 200:
+#                     graph_data = res.json()
+                    
+#                     vis_nodes = []
+#                     community_counts = {}
+#                     node_colors = {} 
+                    
+#                     tableau10 = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", 
+#                                  "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC"]
+                    
+#                     for n in graph_data.get("nodes", []):
+#                         comm_id = n.get("group", "0")
+                        
+#                         if comm_id not in community_counts:
+#                             community_counts[comm_id] = 0
+#                         community_counts[comm_id] += 1
+                        
+#                         color_hex = tableau10[int(comm_id) % len(tableau10)]
+#                         node_colors[n["id"]] = color_hex 
+                        
+#                         vis_nodes.append({
+#                             "id": n["id"],
+#                             "label": n["label"],
+#                             "title": n["title"],
+#                             "size": n["size"],
+#                             "shape": n["shape"],
+#                             "font": n.get("font"),
+#                             "color": {"background": color_hex, "border": color_hex},
+#                             "community": comm_id,
+#                             "community_name": f"Community {comm_id}",
+#                             "_file_type": n["type"],
+#                             "_is_pending": n.get("_is_pending", False)
+#                         })
+                        
+#                     vis_edges = []
+#                     for e in graph_data.get("edges", []):
+#                         source_color = node_colors.get(e["source"], "#4a5568")
+#                         vis_edges.append({
+#                             "from": e["source"], 
+#                             "to": e["target"], 
+#                             "label": e["label"],
+#                             "color": source_color, 
+#                             "width": 0.4           
+#                         })
+                        
+#                     # --- FIX 1: SORT THE LEGEND ---
+#                     vis_legend = []
+#                     # Sort the dictionary items strictly by their integer community ID
+#                     sorted_communities = sorted(community_counts.items(), key=lambda x: int(x[0]) if str(x[0]).isdigit() else x[0])
+                    
+#                     for cid, count in sorted_communities:
+#                         vis_legend.append({
+#                             "cid": cid, 
+#                             "color": tableau10[int(cid) % len(tableau10)], 
+#                             "label": f"Community {cid}", 
+#                             "count": count
+#                         })
+ 
+#                     render_graph_health_banner(st.session_state.active_repo, layout_context="visualizer")
+                    
+#                     js_nodes = json.dumps(vis_nodes)
+#                     js_edges = json.dumps(vis_edges)
+#                     js_legend = json.dumps(vis_legend)
+
+#                     if layout_style == "📂 Hierarchical (Tree)":
+#                         js_physics_config = """
+#                         layout: {
+#                           hierarchical: { enabled: true, direction: "UD", sortMethod: "directed", levelSeparation: 150, nodeSpacing: 100 }
+#                         },
+#                         physics: {
+#                           solver: 'hierarchicalRepulsion',
+#                           hierarchicalRepulsion: { centralGravity: 0.0, springLength: 100, springConstant: 0.01, nodeDistance: 120 }
+#                         },
+#                         """
+#                     else:
+#                         js_physics_config = """
+#                         physics: {
+#                           solver: 'forceAtlas2Based',
+#                           forceAtlas2Based: { gravitationalConstant: -50, centralGravity: 0.005, springLength: 220, springConstant: 0.05, damping: 0.6, avoidOverlap: 1.0 },
+#                           stabilization: { iterations: 200, fit: true }
+#                         },
+#                         """
+
+
+#                     custom_html = get_graph_html(API_BASE, st.session_state.active_repo, st.session_state.target_path, js_nodes, js_edges, js_legend, js_physics_config)
+#                     components.html(custom_html, height=800, scrolling=False)
+                    
+#                     # Capture the return value from the JavaScript click!
+#                     clicked_node = components.html(custom_html, height=800, scrolling=False)
+                    
+#                     if clicked_node:
+#                         st.session_state.selected_node_for_chat = clicked_node
+#                         st.rerun()
+ 
+                    
+#             except Exception as e:
+#                 st.error(f"Failed to connect to API: {e}")
+
 with tab_map:
     st.markdown("### Codebase Topography")
-    st.caption("Explore the semantic relationships using the custom Graphify engine.")
+    st.caption("Explore the semantic relationships. Click any node to open the embedded context inspector and chat sidepanel.")
     
     layout_style = st.radio(
         "Select Graph Layout:",
         ["🌐 Organic (Physics)", "📂 Hierarchical (Tree)"],
-        horizontal=True
+        horizontal=True,
+        key="graph_layout_style_final"
     )
     
     if st.button("🔄 Render Map", use_container_width=True):
@@ -521,7 +765,6 @@ with tab_map:
                     
                     for n in graph_data.get("nodes", []):
                         comm_id = n.get("group", "0")
-                        
                         if comm_id not in community_counts:
                             community_counts[comm_id] = 0
                         community_counts[comm_id] += 1
@@ -530,41 +773,27 @@ with tab_map:
                         node_colors[n["id"]] = color_hex 
                         
                         vis_nodes.append({
-                            "id": n["id"],
-                            "label": n["label"],
-                            "title": n["title"],
-                            "size": n["size"],
-                            "shape": n["shape"],
-                            "font": n.get("font"),
+                            "id": n["id"], "label": n["label"], "title": n["title"],
+                            "size": n["size"], "shape": n["shape"], "font": n.get("font"),
                             "color": {"background": color_hex, "border": color_hex},
-                            "community": comm_id,
-                            "community_name": f"Community {comm_id}",
-                            "_file_type": n["type"],
-                            "_is_pending": n.get("_is_pending", False)
+                            "community": comm_id, "community_name": f"Community {comm_id}",
+                            "_file_type": n["type"], "_is_pending": n.get("_is_pending", False)
                         })
                         
                     vis_edges = []
                     for e in graph_data.get("edges", []):
                         source_color = node_colors.get(e["source"], "#4a5568")
                         vis_edges.append({
-                            "from": e["source"], 
-                            "to": e["target"], 
-                            "label": e["label"],
-                            "color": source_color, 
-                            "width": 0.4           
+                            "from": e["source"], "to": e["target"], "label": e["label"],
+                            "color": source_color, "width": 0.4           
                         })
                         
-                    # --- FIX 1: SORT THE LEGEND ---
                     vis_legend = []
-                    # Sort the dictionary items strictly by their integer community ID
                     sorted_communities = sorted(community_counts.items(), key=lambda x: int(x[0]) if str(x[0]).isdigit() else x[0])
-                    
                     for cid, count in sorted_communities:
                         vis_legend.append({
-                            "cid": cid, 
-                            "color": tableau10[int(cid) % len(tableau10)], 
-                            "label": f"Community {cid}", 
-                            "count": count
+                            "cid": cid, "color": tableau10[int(cid) % len(tableau10)], 
+                            "label": f"Community {cid}", "count": count
                         })
  
                     render_graph_health_banner(st.session_state.active_repo, layout_context="visualizer")
@@ -574,28 +803,16 @@ with tab_map:
                     js_legend = json.dumps(vis_legend)
 
                     if layout_style == "📂 Hierarchical (Tree)":
-                        js_physics_config = """
-                        layout: {
-                          hierarchical: { enabled: true, direction: "UD", sortMethod: "directed", levelSeparation: 150, nodeSpacing: 100 }
-                        },
-                        physics: {
-                          solver: 'hierarchicalRepulsion',
-                          hierarchicalRepulsion: { centralGravity: 0.0, springLength: 100, springConstant: 0.01, nodeDistance: 120 }
-                        },
-                        """
+                        js_physics_config = "layout: { hierarchical: { enabled: true, direction: 'UD', sortMethod: 'directed', levelSeparation: 150, nodeSpacing: 100 } }, physics: { solver: 'hierarchicalRepulsion', hierarchicalRepulsion: { centralGravity: 0.0, springLength: 100, springConstant: 0.01, nodeDistance: 120 } },"
                     else:
-                        js_physics_config = """
-                        physics: {
-                          solver: 'forceAtlas2Based',
-                          forceAtlas2Based: { gravitationalConstant: -50, centralGravity: 0.005, springLength: 220, springConstant: 0.05, damping: 0.6, avoidOverlap: 1.0 },
-                          stabilization: { iterations: 200, fit: true }
-                        },
-                        """
+                        js_physics_config = "physics: { solver: 'forceAtlas2Based', forceAtlas2Based: { gravitationalConstant: -50, centralGravity: 0.005, springLength: 220, springConstant: 0.05, damping: 0.6, avoidOverlap: 1.0 }, stabilization: { iterations: 200, fit: true } },"
 
-
-                    custom_html = get_graph_html(API_BASE, st.session_state.active_repo, st.session_state.target_path, js_nodes, js_edges, js_legend, js_physics_config)
-                    components.html(custom_html, height=800, scrolling=False)
- 
+                    st.session_state.saved_graph_html = get_graph_html(API_BASE, st.session_state.active_repo, st.session_state.target_path, js_nodes, js_edges, js_legend, js_physics_config)
+                    st.rerun() 
                     
             except Exception as e:
                 st.error(f"Failed to connect to API: {e}")
+
+    # One clean render. No python variables assigned. No loops.
+    if "saved_graph_html" in st.session_state:
+        components.html(st.session_state.saved_graph_html, height=800, scrolling=False)

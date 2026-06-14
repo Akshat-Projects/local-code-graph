@@ -428,19 +428,19 @@ class GraphQueryEngine:
         router_prompt = f"""You are an elite, high-speed routing engine for a local repository AI assistant.
             Your sole job is to classify the user's latest input into one of two routing destinations:
 
-            1. 'CONVERSATIONAL': Choose this if the user is greeting you, making small talk, asking general non-code questions, or continuing a casual dialogue.
-            2. 'CODEBASE': Choose this if the user is asking about specific code logic, searching for functions/methods/variables, asking for snippets, debugging errors, or typing technical programming identifiers.
+            1. 'CONVERSATIONAL': Choose this ONLY if the user is greeting you, making small talk, or asking meta-questions about the chat history itself (e.g., "What did I just ask?").
+            2. 'CODEBASE': Choose this for anything else. 
+            **CRITICAL OVERRIDE:** If the user asks an explanatory question like "How does X work?", "Why do we use Y?", or "What advantage does Z provide?", you MUST route to CODEBASE so the agent can read the repository files to find the answer.
 
             ---
             FEW-SHOT EXAMPLES:
 
             Input: "Hi there" -> Destination: CONVERSATIONAL
-            Input: "John Doe" -> Destination: CONVERSATIONAL
+            Input: "What questions did I ask you so far?" -> Destination: CONVERSATIONAL
+            Input: "Can you tell what advantage Data Normalizer did provide?" -> Destination: CODEBASE
+            Input: "Why are we using a median blur here?" -> Destination: CODEBASE
             Input: "process_data_frame" -> Destination: CODEBASE
-            Input: "calculateMetrics" -> Destination: CODEBASE
-            Input: "what does this function do?" -> Destination: CODEBASE
             Input: "thanks for the help" -> Destination: CONVERSATIONAL
-            Input: "np.log10" -> Destination: CODEBASE
             Input: "where is the threshold setting?" -> Destination: CODEBASE
             ---
 
@@ -448,11 +448,11 @@ class GraphQueryEngine:
             {chat_history}
 
             Latest User Input: "{user_query}"
-            
+
             Respond with EXACTLY one word, either 'CONVERSATIONAL' or 'CODEBASE'. Do not include punctuation, explanation, or markdown formatting.
 
             Destination:"""
-        
+            
         try:
             # A blazing fast, non-streaming call to get the routing word
             decision = await self.kernel.invoke_prompt(prompt=router_prompt)
@@ -473,7 +473,7 @@ class GraphQueryEngine:
         intent = await self._route_query(user_query, chat_history)
         
         execution_settings = OpenAIChatPromptExecutionSettings(
-            max_tokens=max_tokens if max_tokens and max_tokens > 0 else 4096
+            max_tokens=max_tokens if max_tokens and max_tokens > 0 else 16384
         )
 
         # 2. Branch the Logic based on the Agent's decision
