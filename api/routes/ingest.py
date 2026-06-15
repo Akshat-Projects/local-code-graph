@@ -246,7 +246,8 @@ async def get_job_status(job_id: str):
 @router.get("/visualize/{repo_name}")
 async def get_graph_visualization(
     repo_name: str,
-    target_path: str | None = None
+    target_path: str | None = None,
+    show_configs: bool = False
 ):
     """Returns the graph data formatted for vis.js / streamlit-agraph."""
     # 1. Get the absolute path to the root of your Python project securely
@@ -274,6 +275,7 @@ async def get_graph_visualization(
         
         nodes = []
         edges = []
+        valid_node_ids = set()
         
         # Format Nodes
         for node_id, data in G.nodes(data=True):
@@ -282,6 +284,19 @@ async def get_graph_visualization(
             parts = str(node_id).split("::")
             file_group = parts[0] 
             label = parts[-1]
+            
+            # --- Config Filter Logic ---
+            is_config = False
+            if node_type == "file" and label.endswith(('.json', '.yml', '.yaml', '.txt', '.toml')):
+                is_config = True
+            elif node_type in ["library", "infrastructure"]:
+                is_config = True
+                
+            if not show_configs and is_config:
+                continue
+                
+            valid_node_ids.add(str(node_id))
+            
             # 1. Scale node size AND MASS dynamically based on degree (hubness)
             degree = G.degree(node_id)
             base_size = 10 + (degree * 1.6)
@@ -290,10 +305,15 @@ async def get_graph_visualization(
             mass = 1 + (degree * 0.1)
             
             if node_type == "file":
-                size = 20 + min(degree * 0.8, 13) 
-                font_size = 11 if degree >= 2 else 0
-                font_color = "#E2E8F0"
-                mass = 3 + (degree * 0.1) 
+                if label.endswith(('.json', '.yml', '.yaml', '.txt', '.toml')):
+                    shape = "square"    # <--- Configs become squares!
+                    size = 22
+                    font_color = "#F28E2B"
+                else:
+                    size = 20 + min(degree * 0.8, 13) 
+                    font_size = 11 if degree >= 2 else 0
+                    font_color = "#E2E8F0"
+                    mass = 3 + (degree * 0.1) 
             elif node_type == "class":
                 size = 14 + min(degree * 0.8, 7)
                 font_size = 9 if degree >= 2 else 0
@@ -305,12 +325,13 @@ async def get_graph_visualization(
                 font_color = "#A0AEC0"
                 mass = 1
 
-            if degree >= 10:
-                font_size = 12
-                font_color = "#ffffff"
-            else:
-                font_size = 10
-                font_color = "#ffffff"
+            if not label.endswith(('.json', '.yml', '.yaml', '.txt', '.toml')):
+                if degree >= 10:
+                    font_size = 12
+                    font_color = "#ffffff"
+                else:
+                    font_size = 10
+                    font_color = "#ffffff"
             
             # Smart Tooltips
             summary = data.get("summary", "").strip()
@@ -353,6 +374,14 @@ async def get_graph_visualization(
         # Format Edges
         for source, target, data in G.edges(data=True):
             display_label = ""
+            
+            # --- Only add the edge if BOTH nodes are visible! ---
+            if str(source) in valid_node_ids and str(target) in valid_node_ids:
+                edges.append({
+                    "from": str(source),
+                    "to": str(target),
+                    "label": ""
+                })
             
             edges.append({
                 "from": str(source),   # CRITICAL FIX: Vis.js demands "from", not "source"

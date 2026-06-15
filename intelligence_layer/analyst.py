@@ -1,4 +1,4 @@
-import os
+from semantic_kernel.connectors.ai.open_ai import OpenAIChatPromptExecutionSettings
 import json
 import asyncio
 from pydantic import ValidationError
@@ -168,7 +168,8 @@ class GraphAnalyst:
                     arguments = KernelArguments(
                         target_nodes=json.dumps(
                             target_node_ids,
-                            indent=2
+                            indent=2,
+                            settings=OpenAIChatPromptExecutionSettings(max_tokens=8192)
                         ),
                         global_symbol_list=json.dumps(
                             global_symbols,

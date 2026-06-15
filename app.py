@@ -63,6 +63,7 @@ with st.sidebar:
     st.session_state.active_repo = repo_input_sanitized
     path_input = st.text_input("Local Source Path", key="target_path")
     run_llm = st.toggle("🧠 Run Deep LLM Analysis", value=True, help="Disable to instantly build the structural graph. You can run LLM summarization later by re-ingesting with this checked.")
+    # show_configs = st.toggle("Show Infrastructure & Libraries", value=True)
     
     if st.button("Ingest & Analyze Codebase", use_container_width=True):
         if st.session_state.is_generating:
@@ -540,7 +541,8 @@ with tab_map:
             try:
                 res = requests.get(
                     f"{API_BASE}/ingest/visualize/{st.session_state.active_repo}",
-                    params={"target_path": st.session_state.target_path}
+                    params={"target_path": st.session_state.target_path,
+                            "show_configs": True}
                 )
                 
                 if res.status_code == 200:
@@ -649,4 +651,5 @@ with tab_map:
     if "saved_graph_html" in st.session_state:
         render_graph_health_banner(st.session_state.active_repo, layout_context="visualizer")
         st.iframe(st.session_state.saved_graph_html, height=800)
+        # components.html(st.session_state.saved_graph_html, height = 800, scrolling=False)
         

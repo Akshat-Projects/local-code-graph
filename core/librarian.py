@@ -3,6 +3,7 @@ import hashlib
 import re
 import networkx as nx
 from pathlib import Path
+import tempfile
 
 from utils.constants import AllowedTypes
 from utils.logger import get_logger
@@ -57,8 +58,21 @@ class Librarian:
         return nx.MultiDiGraph()
 
     def save_graph(self):
-        """Serializes the current in-memory NetworkX graph to the isolated storage path."""
-        nx.write_graphml(self.graph, self.graph_path)
+        """Saves the graph using an atomic write to prevent UI read-crashes."""
+        try:
+            dir_name = os.path.dirname(self.graph_path)
+            os.makedirs(dir_name, exist_ok=True)
+            
+            # 1. Write to a temporary file first
+            fd, temp_path = tempfile.mkstemp(dir=dir_name, prefix=".tmp_", suffix=".graphml")
+            with os.fdopen(fd, 'wb') as f:
+                nx.write_graphml(self.graph, f)
+                
+            # 2. Atomic rename (Instantly replaces the old file, zero chance of read corruption)
+            os.replace(temp_path, self.graph_path)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save graph atomically: {e}")
 
     @staticmethod
     def calculate_file_hash(absolute_path: str) -> str:

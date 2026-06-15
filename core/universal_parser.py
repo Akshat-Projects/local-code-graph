@@ -22,6 +22,7 @@ import tree_sitter_swift as tsswift
 import tree_sitter_kotlin as tskotlin
 # import tree_sitter_r as tsr
 
+from core.config_extractor import ConfigExtractor
 from utils.logger import get_logger
 
 
@@ -68,9 +69,11 @@ LANGUAGE_CONFIG = {
 
     # Database & Configs (No structural extraction, just treated as file nodes)
     ".sql": {"lang": None, "type": "sql"},
-    ".json": {"lang": None, "type": "json"},
-    ".yaml": {"lang": None, "type": "yaml"},
-    ".yml": {"lang": None, "type": "yaml"},
+    ".toml": {"type": "config"},
+    ".txt": {"type": "config"},
+    ".json": {"type": "config"},
+    ".yaml": {"type": "config"},
+    ".yml": {"type": "config"}
 }
 
 # 3. Define S-Expression Queries per Language
@@ -98,10 +101,15 @@ class UniversalParser:
     def __init__(self, graph: nx.MultiDiGraph):
         self.graph = graph
         self.parsers = {}
+        self.config_extractor = ConfigExtractor(self.graph)
         # self._graph_lock = threading.Lock()
         
         # Pre-load parsers for efficiency
         for ext, config in LANGUAGE_CONFIG.items():
+            # --- Skip building Tree-sitter parsers for config files ---
+            if "lang" not in config:
+                continue
+                
             parser = tree_sitter.Parser()
             parser.language = config["lang"]
             self.parsers[ext] = parser
@@ -116,6 +124,21 @@ class UniversalParser:
 
     def parse_file(self, absolute_path: str, relative_path: str, file_hash: str):
         ext = Path(absolute_path).suffix
+        file_node_id = self._register_file_node(relative_path, file_hash)
+        file_ext = Path(absolute_path).suffix.lower()
+        filename = Path(absolute_path).name.lower()
+
+        # --- Route config files to the Extractor ---
+        target_configs = [
+            "package.json", 
+            "requirements.txt", 
+            "docker-compose.yml", 
+            "docker-compose.yaml", 
+            "pyproject.toml"
+        ]
+        if filename in target_configs:
+            self.config_extractor.extract(absolute_path, relative_path, file_node_id)
+            return # We are done, no Tree-sitter needed for these!
         
         # Fallback for unsupported files: just track them as a file node
         if ext not in LANGUAGE_CONFIG:
@@ -129,7 +152,7 @@ class UniversalParser:
             with open(absolute_path, "r", encoding="utf-8") as f:
                 source_code = f.read()
                 
-            # --- FIX: Re-added the Jupyter Notebook Interceptor ---
+            # --- Added the Jupyter Notebook Interceptor ---
             if ext == ".ipynb":
                 notebook = json.loads(source_code)
                 virtual_code = []
@@ -150,7 +173,6 @@ class UniversalParser:
             return
 
         self.clear_file_nodes(relative_path)
-        file_node_id = self._register_file_node(relative_path, file_hash)
 
         # HTML doesn't need structural parsing, just the file node
         if lang_type == "html":
