@@ -10,31 +10,17 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     <meta charset="UTF-8">
     <script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://unpkg.com/3d-force-graph"></script>
     <style>
-        /* 1. Nuke scrollbars on the iframe root entirely */
         html, body {
-        margin: 0 !important;
-        padding: 0 !important;
-        width: 100vw !important;
-        height: 100vh !important;
-        overflow: hidden !important; 
+            margin: 0 !important; padding: 0 !important;
+            width: 100vw !important; height: 100vh !important;
+            overflow: hidden !important; 
         }
         
-        /* 2. Lock the network canvas to absolute coordinates */
-        #mynetwork {
-            position: absolute !important;
-            top: 0;
-            left: 0;
-            width: 100% !important;
-            height: 100% !important;
-            overflow: hidden !important;
-        }
-
-        /* 3. Force the tooltip to hover above everything without moving the DOM */
         div.vis-tooltip {
             position: fixed !important;
-            transform: translate(-50%, -100%); /* Centers it perfectly above the mouse */
-            margin-top: -15px; /* Offset to not cover the node */
+            transform: translate(15px, 15px); 
             max-width: 350px;
             white-space: normal !important;
             word-wrap: break-word !important;
@@ -44,54 +30,25 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
             border-radius: 6px !important;
             padding: 10px !important;
             z-index: 99999 !important;
-            pointer-events: none !important; /* Prevents phantom hover loops */
+            pointer-events: none !important; 
         }
         
-        /* Forces all checkboxes with this class to match your UI's blue theme */
-        .custom-cb {
-        accent-color: #4E79A7 !important;
-        width: 16px;
-        height: 16px;
-        cursor: pointer;
-        vertical-align: middle;
-        margin-right: 6px;
-        }
+        .custom-cb { accent-color: #4E79A7 !important; width: 16px; height: 16px; cursor: pointer; vertical-align: middle; margin-right: 6px; }
+        .control-panel label { color: #E2E8F0; font-family: sans-serif; font-size: 14px; display: flex; align-items: center; }
         
-        .control-panel label {
-            color: #E2E8F0; /* Clean white/gray text */
-            font-family: sans-serif;
-            font-size: 14px;
-            display: flex;
-            align-items: center;
-        }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1a1a2e; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background: #3a3a5e; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4E79A7; }
+        * { scrollbar-width: thin; scrollbar-color: #3a3a5e #1a1a2e; box-sizing: border-box; margin: 0; padding: 0; }
         
-        /* --- MODERN SCROLLBAR STYLING --- */
-        /* WebKit (Chrome, Edge, Safari) */
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #1a1a2e; /* Matches your sidebar background */
-            border-radius: 10px;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #3a3a5e; /* Distinct, but fits the dark tone */
-            border-radius: 4px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #4E79A7; /* Highlights using your primary graph color */
-        }
-
-        /* Firefox */
-        * {
-            scrollbar-width: thin;
-            scrollbar-color: #3a3a5e #1a1a2e;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background: #0f0f1a; color: #e0e0e0; font-family: -apple-system, sans-serif; display: flex; height: 100vh; overflow: hidden; position: relative; }
-        #graph { flex: 1; }
-        #sidebar { width: 280px; background: #1a1a2e; border-left: 1px solid #2a2a4e; display: flex; flex-direction: column; overflow: hidden; }
+        
+        #canvas-container { flex: 1; position: relative; overflow: hidden; }
+        #graph { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #graph-3d { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; }
+        
+        #sidebar { width: 280px; background: #1a1a2e; border-left: 1px solid #2a2a4e; display: flex; flex-direction: column; overflow: hidden; z-index: 10; }
         #search-wrap { padding: 12px; border-bottom: 1px solid #2a2a4e; }
         #search { width: 100%; background: #0f0f1a; border: 1px solid #3a3a5e; color: #e0e0e0; padding: 7px 10px; border-radius: 6px; font-size: 13px; outline: none; margin-bottom: 8px; }
         #search:focus { border-color: #4E79A7; }
@@ -109,7 +66,6 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         .spinner { width: 40px; height: 40px; border: 4px solid #1a1a2e; border-top: 4px solid #4E79A7; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 16px; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         
-        /* Custom Markdown Styling for the Chat */
         .md-content p { margin-bottom: 6px; }
         .md-content code { background: #2a2a4e; padding: 2px 4px; border-radius: 3px; font-family: monospace; font-size: 11px; color: #F6E05E; }
         .md-content pre { background: #0f0f1a; padding: 8px; border-radius: 4px; overflow-x: auto; margin-bottom: 6px; border: 1px solid #3a3a5e; }
@@ -136,27 +92,9 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         #select-all-cb:indeterminate { background: #4E79A7; border-color: #4E79A7; }
         #select-all-cb:indeterminate::after { content: ''; position: absolute; left: 2px; top: 5px; width: 8px; height: 2px; background: #fff; border: none; transform: none; }
 
-        /* --- POP-OUT CHAT STYLES --- */
         #node-chat-wrap { display: none; padding: 14px; border-bottom: 1px solid #2a2a4e; flex-direction: column; gap: 8px; background: #1a1a2e; transition: all 0.2s ease; }
-        
-        #node-chat-wrap.popped-out {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            width: 360px;
-            height: 480px;
-            max-height: 80vh;
-            border: 1px solid #4E79A7;
-            border-radius: 8px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
-            z-index: 999;
-        }
-
-        #node-chat-wrap.popped-out #node-chat-history {
-            max-height: calc(100% - 65px) !important;
-            flex-grow: 1;
-        }
-
+        #node-chat-wrap.popped-out { position: absolute; top: 20px; left: 20px; width: 360px; height: 480px; max-height: 80vh; border: 1px solid #4E79A7; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); z-index: 999; }
+        #node-chat-wrap.popped-out #node-chat-history { max-height: calc(100% - 65px) !important; flex-grow: 1; }
         .chat-header-container { display: flex; justify-content: space-between; align-items: center; }
         .popout-btn { background: transparent; border: none; color: #aaa; cursor: pointer; font-size: 14px; display: flex; align-items: center; padding: 2px; border-radius: 4px; font-weight: bold; }
         .popout-btn:hover { color: #4E79A7; background: #2a2a4e; }
@@ -168,12 +106,15 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         <div style="font-size: 14px; font-weight: bold; letter-spacing: 1px;">CALCULATING TOPOGRAPHY</div>
         <div style="font-size: 11px; color: #aaa; margin-top: 8px;">Applying physics parameters...</div>
     </div>
-    <div id="graph"></div>
+    
+    <div id="canvas-container">
+        <div id="graph"></div>
+        <div id="graph-3d"></div>
+    </div>
     
     <div id="sidebar">
         <div id="search-wrap">
             <input id="search" type="text" placeholder="Search nodes..." autocomplete="off">
-            
             <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 14px; padding-bottom: 4px;">
                 <label style="color:#E2E8F0; font-size:13px; cursor:pointer; display:flex; align-items:center;">
                     <input type="checkbox" id="isolate-cb" class="custom-cb"> Isolate Focus (1-Hop)
@@ -181,8 +122,10 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
                 <label style="color:#E2E8F0; font-size:13px; cursor:pointer; display:flex; align-items:center;">
                     <input type="checkbox" id="config-cb" class="custom-cb" checked> Show Infrastructure & Libs
                 </label>
+                <label style="color:#E2E8F0; font-size:13px; cursor:pointer; display:flex; align-items:center;">
+                    <input type="checkbox" id="toggle-3d-cb" class="custom-cb"> 🌌 Enable 3D Hyperspace
+                </label>
             </div>
-            
             <div id="search-results"></div>
         </div>
         
@@ -196,9 +139,7 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
                 <h3 style="font-size: 13px; color: #aaa; text-transform: uppercase;">Ask this Node</h3>
                 <button id="chat-popout-toggle" class="popout-btn" title="Toggle Pop-out Mode">⤢</button>
             </div>
-            
             <div id="node-chat-pending-warning" style="display: none; font-size: 11px; color: #BAB0AC; font-style: italic; margin-bottom: 4px;"></div>
-            
             <div id="node-chat-history" style="max-height: 150px; overflow-y: auto; font-size: 12px; color: #ccc; display: flex; flex-direction: column; gap: 6px;"></div>
             <input id="node-chat-input" type="text" placeholder="e.g. What does this function do?" autocomplete="off" style="width: 100%; background: #0f0f1a; border: 1px solid #3a3a5e; color: #e0e0e0; padding: 7px 10px; border-radius: 6px; font-size: 12px; outline: none;">
         </div>
@@ -214,12 +155,10 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     <script>
     """
 
-    # --- HTML TAG COLLISION ESCAPE ---
     safe_js_nodes = js_nodes.replace("</", r"\/")
     safe_js_edges = js_edges.replace("</", r"\/")
     safe_js_legend = js_legend.replace("</", r"\/")
 
-    # --- PROPER VARIABLE SCOPING ---
     js_data = f"""
     const API_BASE = {json.dumps(API_BASE)};
     const REPO_NAME = {json.dumps(repo_name)};
@@ -240,10 +179,9 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         let bg = '#4E79A7';
         let bd = '#4E79A7';
         if (n && n.color) {
-            bg = n.color.background || bg;
+            bg = n.color.background || n.color || bg;
             bd = n.color.border || bd;
         }
-        
         return {
             id: n.id, label: n.label, size: n.size, font: n.font, title: n.title, shape: n.shape,
             group: n.group, 
@@ -262,12 +200,8 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     })));
 
     const container = document.getElementById('graph');
-    const rect0 = container.getBoundingClientRect();
-
     const network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, {
-        width: Math.floor(rect0.width) + 'px',
-        height: Math.floor(rect0.height) + 'px',
-        autoResize: false,
+        autoResize: true,
         """ + js_physics_config + """
         interaction: { hover: true, tooltipDelay: 100, hideEdgesOnDrag: true },
         nodes: { borderWidth: 1.5 },
@@ -275,11 +209,8 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     });
 
     function freezeAndShow() {
-        if (network.physics) {
-            network.physics.stopSimulation(); 
-        }
+        if (network.physics) { network.physics.stopSimulation(); }
         network.setOptions({ physics: false }); 
-        
         const overlay = document.getElementById('loading-overlay');
         if (overlay) {
             overlay.style.opacity = '0';
@@ -290,16 +221,6 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     network.once('stabilizationIterationsDone', freezeAndShow);
     network.once('stabilized', freezeAndShow);
     setTimeout(freezeAndShow, 1500); 
-    
-    let resizeDebounce = null;
-    window.addEventListener('resize', () => {
-        clearTimeout(resizeDebounce);
-        resizeDebounce = setTimeout(() => {
-            const r = container.getBoundingClientRect();
-            network.setSize(Math.floor(r.width) + 'px', Math.floor(r.height) + 'px');
-            network.redraw();
-        }, 200);
-    });
 
     let searchTimeout = null;
     const searchInput = document.getElementById('search');
@@ -317,11 +238,17 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
             
             searchResults.style.display = 'block';
             matches.forEach(n => {
-            const el = document.createElement('div');
-            el.className = 'search-item'; el.textContent = n.label;
-            el.style.borderLeft = `3px solid ${n.color.background}`; el.style.paddingLeft = '8px';
-            el.onclick = () => { focusNode(n.id); searchResults.style.display = 'none'; searchInput.value = ''; };
-            searchResults.appendChild(el);
+                const el = document.createElement('div');
+                el.className = 'search-item'; el.textContent = n.label;
+                let sc = '#4E79A7';
+                if (n.color) sc = n.color.background || n.color || sc;
+                
+                el.style.borderLeft = `3px solid ${sc}`; el.style.paddingLeft = '8px';
+                el.onclick = () => { 
+                    focusNode(n.id); 
+                    searchResults.style.display = 'none'; 
+                };
+                searchResults.appendChild(el);
             });
         }, 250); 
     });
@@ -333,6 +260,75 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     let currentSelectedNode = null;
     const hiddenCommunities = new Set();
 
+    // --- SHARED DESELECT FUNCTION (WITH 2D RECENTERING) ---
+    function deselectNode() {
+        currentSelectedNode = null;
+        network.unselectAll(); 
+        document.getElementById('info-content').innerHTML = '<span class="empty">Click a node to inspect it</span>';
+        applyIsolation();
+        chatWrap.style.display = 'none';
+        
+        const toggle3D = document.getElementById('toggle-3d-cb');
+        if (toggle3D.checked && Graph3D) {
+            Graph3D.zoomToFit(1000, 50);
+        } else {
+            // Smoothly fly back to see the whole graph in 2D
+            network.fit({ animation: { duration: 1000, easingFunction: 'easeInOutQuad' } });
+        }
+    }
+    network.on('deselectNode', deselectNode);
+
+    // --- BULLETPROOF 3D ENGINE ---
+    let Graph3D = null;
+    const container2D = document.getElementById('graph');
+    const container3D = document.getElementById('graph-3d');
+    const toggle3D = document.getElementById('toggle-3d-cb');
+
+    function init3D() {
+        if (!Graph3D) {
+            const w = document.body.clientWidth - 280;
+            const h = document.body.clientHeight;
+            Graph3D = ForceGraph3D()(container3D)
+                .width(w)
+                .height(h)
+                .backgroundColor('#0f0f1a')
+                .nodeLabel(node => `<div style="background: rgba(15,15,26,0.9); padding: 6px 10px; border: 1px solid #3a3a5e; border-radius: 4px; color: #e0e0e0; font-size: 12px; font-family: sans-serif;">${esc(node.name)}</div>`)
+                .nodeColor('color')
+                .nodeVal('val') 
+                .linkWidth(0.5)
+                .linkColor(() => '#3a3a5e')
+                .onNodeClick(node => focusNode(node.id))
+                .onBackgroundClick(deselectNode); 
+                
+            // THE PHANTOM FIX: Strict Set of mathematically valid Node IDs
+            const validNodeIds = new Set(RAW_NODES.map(n => String(n.id)));
+
+            const nodes3D = RAW_NODES.map(n => {
+                let c = '#4E79A7';
+                if (n.color) {
+                    if (typeof n.color === 'string') c = n.color;
+                    else if (n.color.background) c = n.color.background;
+                }
+                return {
+                    id: String(n.id), 
+                    name: n.label,
+                    color: c,
+                    val: Math.max(1, (n.size || 15) / 3) // Prevent massive blobs
+                };
+            });
+            
+            // THE PHANTOM FIX: Aggressively destroy orphaned edges before 3D rendering
+            const links3D = RAW_EDGES
+                .filter(e => validNodeIds.has(String(e.from)) && validNodeIds.has(String(e.to)))
+                .map(e => ({
+                    source: String(e.from),
+                    target: String(e.to)
+                }));
+            
+            Graph3D.graphData({ nodes: nodes3D, links: links3D });
+        }
+    }
+
     function applyIsolation() {
         const isolate = document.getElementById('isolate-cb').checked;
         const showConfigs = document.getElementById('config-cb').checked;
@@ -343,45 +339,69 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
             visibleSet = new Set([currentSelectedNode, ...neighbors]);
         }
 
+        const visibleNodeIds = new Set(); 
+
         const updates = RAW_NODES.map(n => {
             let isHidden = hiddenCommunities.has(n.community);
-            
-            // 1. Config Filter Logic
             const fileType = n._file_type || '';
-            const isConfig = fileType === 'library' || 
-                             fileType === 'infrastructure' || 
-                             (fileType === 'file' && n.label.match(/\.(json|yaml|yml|toml|txt)$/i));
+            const isConfig = fileType === 'library' || fileType === 'infrastructure' || (fileType === 'file' && n.label.match(/\.(json|yaml|yml|toml|txt)$/i));
             
-            if (!showConfigs && isConfig) {
-                isHidden = true; // Hide it if the config box is unchecked
-            }
-
-            // 2. Isolate Filter Logic
-            if (visibleSet && !visibleSet.has(n.id)) {
-                isHidden = true; // Hide it if we are isolating and it's not a neighbor
-            }
-
+            if (!showConfigs && isConfig) isHidden = true;
+            if (visibleSet && !visibleSet.has(n.id)) isHidden = true;
+            if (!isHidden) visibleNodeIds.add(String(n.id)); 
+            
             return { id: n.id, hidden: isHidden };
         });
 
         nodesDS.update(updates);
+
+        if (toggle3D.checked) {
+            init3D();
+            Graph3D.nodeVisibility(node => visibleNodeIds.has(String(node.id)));
+            Graph3D.linkVisibility(link => {
+                const s = typeof link.source === 'object' ? link.source.id : link.source;
+                const t = typeof link.target === 'object' ? link.target.id : link.target;
+                return visibleNodeIds.has(String(s)) && visibleNodeIds.has(String(t));
+            });
+        }
     }
 
-    // Bind BOTH checkboxes to the same lightning-fast update function!
-    document.getElementById('isolate-cb').addEventListener('change', applyIsolation);
+    document.getElementById('isolate-cb').addEventListener('change', () => {
+        applyIsolation();
+        // Trigger camera flight if a node is currently selected when flipping the toggle
+        if(currentSelectedNode) focusNode(currentSelectedNode);
+    });
+    
     document.getElementById('config-cb').addEventListener('change', applyIsolation);
     
-    // --- Sync the graph with the default checkbox states on load ---
-    applyIsolation();
+    toggle3D.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            container2D.style.display = 'none';
+            container3D.style.display = 'block';
+            applyIsolation();
+            setTimeout(() => { if(Graph3D) Graph3D.zoomToFit(1000, 50); }, 100);
+        } else {
+            container3D.style.display = 'none';
+            container2D.style.display = 'block';
+            applyIsolation(); 
+        }
+    });
+
+    applyIsolation(); 
 
     function showInfo(nodeId) {
         const n = nodesDS.get(nodeId);
         if (!n) return;
         const neighborIds = network.getConnectedNodes(nodeId);
         const neighborItems = neighborIds.map(nid => {
-        const nb = nodesDS.get(nid);
-        const color = nb ? (nb._is_pending ? '#F28E2B' : nb.color.background) : '#555';
-        return `<span class="neighbor-link" style="border-left-color:${esc(color)}" onclick="focusNode(${JSON.stringify(nid)})">${esc(nb ? nb.label : nid)}</span>`;
+            const nb = nodesDS.get(nid);
+            let sc = '#555';
+            if (nb) {
+                if (nb._is_pending) sc = '#F28E2B';
+                else if (nb.color && nb.color.background) sc = nb.color.background;
+                else if (typeof nb.color === 'string') sc = nb.color;
+            }
+            return `<span class="neighbor-link" style="border-left-color:${esc(sc)}" onclick="focusNode(${JSON.stringify(nid)})">${esc(nb ? nb.label : nid)}</span>`;
         }).join('');
         
         const pendingWarning = n._is_pending 
@@ -393,7 +413,7 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         <div class="field"><b>${esc(n.label)}</b></div>
         <div class="field">Type: ${esc(n._file_type || 'unknown')}</div>
         <div class="field">Community: ${esc(n._community_name)}</div>
-        ${neighborIds.length ? `<div class="field" style="margin-top:8px;color:#aaa;font-size:11px">Neighbors (${neighborIds.length})</div><div id="neighbors-list">${neighborItems}</div>` : ''}
+        ${neighborIds.length ? `<div class="field" style="margin-top:8px;color:#aaa;font-size:11px">Neighbors (${neighborIds.length})<br><span style="font-size: 10px; color: #666; font-style: italic;">*In 3D mode, Right-Click + Drag to Pan*</span></div><div id="neighbors-list">${neighborItems}</div>` : ''}
         `;
     }
 
@@ -403,6 +423,9 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     const popoutToggle = document.getElementById('chat-popout-toggle');
 
     function focusNode(nodeId) {
+        const originalNode = RAW_NODES.find(n => String(n.id) === String(nodeId));
+        if (originalNode) nodeId = originalNode.id;
+
         currentSelectedNode = nodeId;
         network.selectNodes([nodeId]);
         showInfo(nodeId);
@@ -410,7 +433,6 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         
         const n = nodesDS.get(nodeId);
         const warningElement = document.getElementById('node-chat-pending-warning');
-        
         if (n && n._is_pending) {
             warningElement.style.display = 'block';
             warningElement.innerHTML = "⏳ LLM summarization pending for this component...";
@@ -419,7 +441,6 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         }
         
         chatWrap.style.display = 'flex';
-        
         if (!nodeChatHistories[nodeId]) {
             const wrapper = document.createElement('div');
             wrapper.style.display = 'flex';
@@ -428,24 +449,53 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
             wrapper.innerHTML = `<div style="color: #A0AEC0; font-style: italic;">Connected to <b>${esc(nodeId)}</b>. Ask a question!</div>`;
             nodeChatHistories[nodeId] = wrapper;
         }
-        
         chatHistory.innerHTML = '';
         chatHistory.appendChild(nodeChatHistories[nodeId]);
         chatHistory.scrollTop = chatHistory.scrollHeight;
+
+        // --- THE CINEMATIC CAMERA SYSTEM ---
+        const isolate = document.getElementById('isolate-cb').checked;
+        
+        if (toggle3D.checked && Graph3D) {
+            // 3D Camera Flight
+            const n3d = Graph3D.graphData().nodes.find(node => String(node.id) === String(nodeId));
+            if (n3d && n3d.x !== undefined && !Number.isNaN(n3d.x)) {
+                const distance = 120;
+                const hypo = Math.hypot(n3d.x, n3d.y, n3d.z);
+                let camPos = { x: n3d.x, y: n3d.y, z: n3d.z + distance }; 
+                if (hypo > 0.1) {
+                    const distRatio = 1 + distance/hypo;
+                    camPos = { x: n3d.x * distRatio, y: n3d.y * distRatio, z: n3d.z * distRatio };
+                }
+                Graph3D.cameraPosition(camPos, n3d, 1500);
+            }
+        } else {
+            // 2D Camera Flight
+            if (isolate) {
+                // Smoothly zoom to perfectly fit the node and its neighbors
+                const neighbors = network.getConnectedNodes(nodeId);
+                network.fit({
+                    nodes: [nodeId, ...neighbors],
+                    animation: { duration: 1000, easingFunction: "easeInOutQuad" }
+                });
+            } else {
+                // Smoothly focus tightly on just the selected node
+                network.focus(nodeId, {
+                    scale: 1.2,
+                    animation: { duration: 1000, easingFunction: "easeInOutQuad" }
+                });
+            }
+        }
     }
 
-    network.on('hoverNode', params => { container.style.cursor = 'pointer'; });
-    network.on('blurNode', () => { container.style.cursor = 'default'; });
-
-    network.on('selectNode', params => {
-        focusNode(params.nodes[0]); 
-    });
-
-    network.on('deselectNode', () => {
-        currentSelectedNode = null;
-        document.getElementById('info-content').innerHTML = '<span class="empty">Click a node to inspect it</span>';
-        applyIsolation();
-        chatWrap.style.display = 'none';
+    network.on('hoverNode', params => { container2D.style.cursor = 'pointer'; });
+    network.on('blurNode', () => { container2D.style.cursor = 'default'; });
+    
+    // Using select instead of selectNode to ensure we catch background clicks properly
+    network.on('select', params => {
+        if (params.nodes.length > 0) {
+            focusNode(params.nodes[0]);
+        }
     });
 
     popoutToggle.addEventListener('click', () => {
@@ -454,7 +504,6 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
             document.body.appendChild(chatWrap);
             popoutToggle.innerText = '⤡'; 
             popoutToggle.style.transform = 'rotate(45deg)';
-            
             chatWrap.setAttribute('draggable', true);
             chatWrap.addEventListener('dragend', function(e) {
                 chatWrap.style.left = e.clientX + 'px';
@@ -475,18 +524,14 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         if (e.key === 'Enter' && chatInput.value.trim() !== '') {
             const question = chatInput.value.trim();
             chatInput.value = '';
-            
             const activeNode = currentSelectedNode;
             const activeWrapper = nodeChatHistories[activeNode];
             
             activeWrapper.insertAdjacentHTML('beforeend', `<div style="color: #F6E05E; margin-bottom: 6px;"><b>You:</b> ${esc(question)}</div>`);
-            
             const msgId = 'ai-msg-' + Date.now();
             activeWrapper.insertAdjacentHTML('beforeend', `<div style="color: #e0e0e0; margin-bottom: 12px;"><b>AI:</b> <span id="${msgId}" style="color: #aaa; font-style: italic;">Thinking...</span></div>`);
             
-            if (currentSelectedNode === activeNode) {
-                chatHistory.scrollTop = chatHistory.scrollHeight;
-            }
+            if (currentSelectedNode === activeNode) chatHistory.scrollTop = chatHistory.scrollHeight;
             
             const aiContainer = activeWrapper.querySelector('#' + msgId);
             let fullMarkdown = "";
@@ -499,10 +544,7 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
                     body: JSON.stringify({ node_id: activeNode, question: question, target_path: TARGET_PATH })
                 });
                 
-                if (!response.ok) {
-                    aiContainer.innerHTML = `<span style="color: #E15759;">Error: ${response.statusText}</span>`;
-                    return;
-                }
+                if (!response.ok) { aiContainer.innerHTML = `<span style="color: #E15759;">Error: ${response.statusText}</span>`; return; }
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder("utf-8");
@@ -510,30 +552,20 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
-                    
                     if (isFirstChunk) {
                         aiContainer.innerHTML = ""; 
                         aiContainer.style.fontStyle = "normal";
                         aiContainer.classList.add("md-content");
                         isFirstChunk = false;
                     }
-                    
-                    const chunkText = decoder.decode(value, { stream: true });
-                    fullMarkdown += chunkText;
-                    
+                    fullMarkdown += decoder.decode(value, { stream: true });
                     aiContainer.innerHTML = marked.parse(fullMarkdown);
-                    
-                    if (currentSelectedNode === activeNode) {
-                        chatHistory.scrollTop = chatHistory.scrollHeight;
-                    }
+                    if (currentSelectedNode === activeNode) chatHistory.scrollTop = chatHistory.scrollHeight;
                 }
-            } catch (error) {
-                aiContainer.innerHTML = `<span style="color: #E15759;">Connection lost.</span>`;
-            }
+            } catch (error) { aiContainer.innerHTML = `<span style="color: #E15759;">Connection lost.</span>`; }
         }
     });
 
-    // --- LEGEND LOGIC ---
     const selectAllCb = document.getElementById('select-all-cb');
     function updateSelectAllState() {
         const total = LEGEND.length; const hidden = hiddenCommunities.size;
