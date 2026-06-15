@@ -1,4 +1,5 @@
 import re
+import asyncio
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pathlib import Path
@@ -10,6 +11,7 @@ from utils.helper import validate_ingestion_path
 from intelligence_layer.query_engine import GraphQueryEngine
 from intelligence_layer.kernel_client import LocalKernelFactory
 from utils.logger import get_logger
+from utils.global_cache import load_graph_cached
 
 logger = get_logger()
 router = APIRouter(prefix="/api/v1/query", tags=["Querying"])
@@ -62,7 +64,7 @@ async def chat_with_node(repo_name: str, req: NodeChatRequest):
         raise HTTPException(status_code=404, detail="Graph not found. Ingest first.")
         
     # Load the graph
-    G = nx.read_graphml(graph_path, node_type=str)
+    G = await load_graph_cached(graph_path)
     
     if req.node_id not in G:
         raise HTTPException(status_code=404, detail="Node not found in graph.")
@@ -143,7 +145,7 @@ async def get_graph_status(repo_name: str):
         }
         
     try:
-        G = nx.read_graphml(graph_path, node_type=str)
+        G = await load_graph_cached(graph_path)
         total_nodes = len(G.nodes)
         pending_summaries = 0
         

@@ -1,5 +1,6 @@
 from core.librarian import Librarian
 from core.ast_parser import CodebaseASTParser
+from core.universal_parser import UniversalParser
 from config import settings
 from utils.logger import get_logger
 
@@ -13,7 +14,8 @@ def sync_codebase(target_repo_path: str, repo_name: str):
     manifest = librarian.scan_repository(target_repo_path)
     
     # 2. Initialize our parser mapping into the active graph object
-    parser = CodebaseASTParser(librarian.graph)
+    parser = UniversalParser(librarian.graph)
+    # parser = CodebaseASTParser(librarian.graph)
     
     parsed_count = 0
     for rel_path, file_meta in manifest.items():

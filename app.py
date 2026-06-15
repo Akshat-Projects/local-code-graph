@@ -394,16 +394,6 @@ def render_graph_health_banner(repo_name: str, layout_context: str = "visualizer
     return False
 
 
-@st.dialog("Expanded Node Chatbot", width="large")
-def expanded_chat_modal():
-    # Render the chat history specifically for the node
-    for msg in st.session_state.get("node_messages", []):
-        st.chat_message(msg["role"]).write(msg["content"])
-        
-    # Put a chat input directly inside the modal
-    if prompt := st.chat_input("Ask about this node..."):
-        # Handle your user input and API call here, just like you do in the sidebar
-        st.write(f"You asked: {prompt}")
 
 def stop_generation():
     """Callback triggered instantly when 'Stop' is clicked."""
@@ -529,211 +519,11 @@ with tab_chat:
     if prompt := st.chat_input("Ask a question about your codebase..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.rerun() # Instantly trigger the generation block above
-# with tab_chat:
-#     # Drain prefill before anything else
-#     prompt_to_run = None
-#     if st.session_state.prefill_prompt:
-#         prompt_to_run = st.session_state.prefill_prompt
-#         st.session_state.prefill_prompt = None
-
-#     if st.session_state.interruption_message:
-#         st.session_state.messages.append({
-#             "role": "assistant",
-#             "content": st.session_state.interruption_message
-#         })
-#         st.session_state.interruption_message = None
-
-#     # --- THE DRY WARNING BANNER ---
-#     render_graph_health_banner(st.session_state.active_repo, layout_context="chatbot")
-    
-#     # Render history
-#     for msg in st.session_state.messages:
-#         with st.chat_message(msg["role"]):
-#             if msg.get("thought"):
-#                 with st.expander("💭 Thought Process", expanded=False):
-#                     st.markdown(msg["thought"])
-#             st.markdown(msg["content"])
-
-#     # Merge typed input and prefill into one variable
-#     typed_prompt = st.chat_input("Ask a question about your codebase...")
-#     prompt = typed_prompt or prompt_to_run   # ← prefill wins if nothing typed
-
-#     if prompt:
-#         st.session_state.is_generating = True
-#         try:
-#             st.chat_message("user").markdown(prompt)
-#             st.session_state.messages.append({"role": "user", "content": prompt})
-            
-#             if st.session_state.ingest_job_id:
-#                 st.session_state.messages.append({
-#                     "role": "assistant",
-#                     "content": "⚠️ Codebase ingestion is currently running. "
-#                                "This response may use a partially updated graph."
-#                 })
-                
-#             # 2. BUNDLE THE CHAT HISTORY
-#             # Grab the last 6 messages (excluding the current one) to send as context
-#             history_msgs = st.session_state.messages[:-1] 
-#             formatted_history = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in history_msgs])
-
-#             with st.chat_message("assistant"):
-#                 thought_container = st.status("💭 Thinking...", expanded=True)
-#                 thought_placeholder = thought_container.empty()
-#                 thought_text = ""
-#                 answer_container = st.empty()
-#                 answer_text = ""
-#                 is_thinking = False
-
-#                 for event_type, chunk in stream_llm_response(
-#                     repo_name=st.session_state.active_repo,
-#                     question=prompt, max_tokens=max_tokens_val, 
-#                     target_path=st.session_state.target_path,
-#                     chat_history=formatted_history 
-#                 ):
-#                     if event_type == "thought":
-#                         is_thinking = True
-#                         thought_text += chunk
-#                         thought_placeholder.markdown(thought_text)
-#                     elif event_type == "text":
-#                         if is_thinking:
-#                             thought_container.update(
-#                                 label="💭 Thought process complete", state="complete", expanded=False
-#                             )
-#                             is_thinking = False
-#                         answer_text += chunk
-#                         answer_container.markdown(answer_text)
-#                     elif event_type == "error":
-#                         st.error(chunk)
-
-#                 st.session_state.messages.append({
-#                     "role": "assistant",
-#                     "thought": thought_text if thought_text else None,
-#                     "content": answer_text
-#                 })
-#         finally:
-#             st.session_state.is_generating = False
 
 
 # ==========================================
 # TAB 2: INTERACTIVE ARCHITECTURE MAP
 # ==========================================
-
-# with tab_map:
-#     st.markdown("### Codebase Topography")
-#     st.caption("Explore the semantic relationships using the custom Graphify engine.")
-    
-#     layout_style = st.radio(
-#         "Select Graph Layout:",
-#         ["🌐 Organic (Physics)", "📂 Hierarchical (Tree)"],
-#         horizontal=True
-#     )
-    
-#     if st.button("🔄 Render Map", use_container_width=True):
-#         with st.spinner("Fetching topography from LocalGraph Engine..."):
-#             try:
-#                 res = requests.get(
-#                     f"{API_BASE}/ingest/visualize/{st.session_state.active_repo}",
-#                     params={"target_path": st.session_state.target_path}
-#                 )
-                
-#                 if res.status_code == 200:
-#                     graph_data = res.json()
-                    
-#                     vis_nodes = []
-#                     community_counts = {}
-#                     node_colors = {} 
-                    
-#                     tableau10 = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", 
-#                                  "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC"]
-                    
-#                     for n in graph_data.get("nodes", []):
-#                         comm_id = n.get("group", "0")
-                        
-#                         if comm_id not in community_counts:
-#                             community_counts[comm_id] = 0
-#                         community_counts[comm_id] += 1
-                        
-#                         color_hex = tableau10[int(comm_id) % len(tableau10)]
-#                         node_colors[n["id"]] = color_hex 
-                        
-#                         vis_nodes.append({
-#                             "id": n["id"],
-#                             "label": n["label"],
-#                             "title": n["title"],
-#                             "size": n["size"],
-#                             "shape": n["shape"],
-#                             "font": n.get("font"),
-#                             "color": {"background": color_hex, "border": color_hex},
-#                             "community": comm_id,
-#                             "community_name": f"Community {comm_id}",
-#                             "_file_type": n["type"],
-#                             "_is_pending": n.get("_is_pending", False)
-#                         })
-                        
-#                     vis_edges = []
-#                     for e in graph_data.get("edges", []):
-#                         source_color = node_colors.get(e["source"], "#4a5568")
-#                         vis_edges.append({
-#                             "from": e["source"], 
-#                             "to": e["target"], 
-#                             "label": e["label"],
-#                             "color": source_color, 
-#                             "width": 0.4           
-#                         })
-                        
-#                     # --- FIX 1: SORT THE LEGEND ---
-#                     vis_legend = []
-#                     # Sort the dictionary items strictly by their integer community ID
-#                     sorted_communities = sorted(community_counts.items(), key=lambda x: int(x[0]) if str(x[0]).isdigit() else x[0])
-                    
-#                     for cid, count in sorted_communities:
-#                         vis_legend.append({
-#                             "cid": cid, 
-#                             "color": tableau10[int(cid) % len(tableau10)], 
-#                             "label": f"Community {cid}", 
-#                             "count": count
-#                         })
- 
-#                     render_graph_health_banner(st.session_state.active_repo, layout_context="visualizer")
-                    
-#                     js_nodes = json.dumps(vis_nodes)
-#                     js_edges = json.dumps(vis_edges)
-#                     js_legend = json.dumps(vis_legend)
-
-#                     if layout_style == "📂 Hierarchical (Tree)":
-#                         js_physics_config = """
-#                         layout: {
-#                           hierarchical: { enabled: true, direction: "UD", sortMethod: "directed", levelSeparation: 150, nodeSpacing: 100 }
-#                         },
-#                         physics: {
-#                           solver: 'hierarchicalRepulsion',
-#                           hierarchicalRepulsion: { centralGravity: 0.0, springLength: 100, springConstant: 0.01, nodeDistance: 120 }
-#                         },
-#                         """
-#                     else:
-#                         js_physics_config = """
-#                         physics: {
-#                           solver: 'forceAtlas2Based',
-#                           forceAtlas2Based: { gravitationalConstant: -50, centralGravity: 0.005, springLength: 220, springConstant: 0.05, damping: 0.6, avoidOverlap: 1.0 },
-#                           stabilization: { iterations: 200, fit: true }
-#                         },
-#                         """
-
-
-#                     custom_html = get_graph_html(API_BASE, st.session_state.active_repo, st.session_state.target_path, js_nodes, js_edges, js_legend, js_physics_config)
-#                     components.html(custom_html, height=800, scrolling=False)
-                    
-#                     # Capture the return value from the JavaScript click!
-#                     clicked_node = components.html(custom_html, height=800, scrolling=False)
-                    
-#                     if clicked_node:
-#                         st.session_state.selected_node_for_chat = clicked_node
-#                         st.rerun()
- 
-                    
-#             except Exception as e:
-#                 st.error(f"Failed to connect to API: {e}")
-
 with tab_map:
     st.markdown("### Codebase Topography")
     st.caption("Explore the semantic relationships. Click any node to open the embedded context inspector and chat sidepanel.")
@@ -755,45 +545,84 @@ with tab_map:
                 
                 if res.status_code == 200:
                     graph_data = res.json()
+                    st.session_state.last_graph_data = graph_data 
                     
                     vis_nodes = []
                     community_counts = {}
                     node_colors = {} 
                     
-                    tableau10 = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", 
-                                 "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC"]
+                    # --- NEW: 35-Color Dark-Mode Optimized Palette ---
+                    extended_palette = [
+                        # The Classics (Reliable baseline)
+                        "#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", 
+                        "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC",
+                        # Cyberpunk / Neons (High contrast on dark bg)
+                        "#00E5FF", "#FF007F", "#39FF14", "#FF4500", "#B452CD",
+                        "#FEE715", "#00FF7F", "#FF3855", "#9D00FF", "#FFAA1D",
+                        # Bright Pastels & Jewels (Easy on the eyes)
+                        "#87CEFA", "#FFB6C1", "#98FB98", "#DDA0DD", "#F0E68C",
+                        "#20B2AA", "#FF7F50", "#EE82EE", "#7B68EE", "#00FA9A",
+                        # Bold Accents
+                        "#FF8C00", "#1E90FF", "#C71585", "#32CD32", "#DAA520"
+                    ]
                     
+                    # 1. Safely Parse Nodes
                     for n in graph_data.get("nodes", []):
-                        comm_id = n.get("group", "0")
+                        comm_id = str(n.get("group", "0"))
                         if comm_id not in community_counts:
                             community_counts[comm_id] = 0
                         community_counts[comm_id] += 1
                         
-                        color_hex = tableau10[int(comm_id) % len(tableau10)]
+                        color_hex = extended_palette[len(community_counts) % len(extended_palette)]
                         node_colors[n["id"]] = color_hex 
                         
                         vis_nodes.append({
-                            "id": n["id"], "label": n["label"], "title": n["title"],
-                            "size": n["size"], "shape": n["shape"], "font": n.get("font"),
-                            "color": {"background": color_hex, "border": color_hex},
-                            "community": comm_id, "community_name": f"Community {comm_id}",
-                            "_file_type": n["type"], "_is_pending": n.get("_is_pending", False)
+                            "id": n["id"], 
+                            "label": n.get("label", ""), 
+                            "title": n.get("title", ""),
+                            "size": n.get("size", 10), 
+                            "shape": n.get("shape", "dot"), 
+                            "font": n.get("font"),
+                            "color": {"background": color_hex, "border": color_hex}, 
+                            "community": comm_id, 
+                            "community_name": f"Community {comm_id}",
+                            "_file_type": n.get("type", "unknown"), 
+                            "_is_pending": n.get("_is_pending", False)
                         })
                         
+                    # 2. Safely Parse Edges (Absolutely NO "source" or "target" here!)
                     vis_edges = []
                     for e in graph_data.get("edges", []):
-                        source_color = node_colors.get(e["source"], "#4a5568")
+                        source_id = e.get("from")
+                        target_id = e.get("to")
+                        
+                        if not source_id or not target_id:
+                            continue
+                            
+                        source_color = node_colors.get(source_id, "#4a5568")
                         vis_edges.append({
-                            "from": e["source"], "to": e["target"], "label": e["label"],
-                            "color": source_color, "width": 0.4           
+                            "from": source_id, 
+                            "to": target_id, 
+                            "label": e.get("label", ""),
+                            "color": source_color, 
+                            "width": 0.4           
                         })
                         
+                    # 3. Safely Parse Legend (Fixed to prevent string/int comparison crashes)
                     vis_legend = []
-                    sorted_communities = sorted(community_counts.items(), key=lambda x: int(x[0]) if str(x[0]).isdigit() else x[0])
+                    # sorted_communities = sorted(community_counts.items(), key=lambda x: str(x[0]))
+                    sorted_communities = sorted(
+                        community_counts.items(), 
+                        key=lambda x: int(x[0]) if str(x[0]).isdigit() else str(x[0])
+                    )
+                    
                     for cid, count in sorted_communities:
+                        color_hex = extended_palette[len(vis_legend) % len(extended_palette)]
                         vis_legend.append({
-                            "cid": cid, "color": tableau10[int(cid) % len(tableau10)], 
-                            "label": f"Community {cid}", "count": count
+                            "cid": cid, 
+                            "color": color_hex, 
+                            "label": f"Community {cid}", 
+                            "count": count
                         })
  
                     render_graph_health_banner(st.session_state.active_repo, layout_context="visualizer")
@@ -811,8 +640,13 @@ with tab_map:
                     st.rerun() 
                     
             except Exception as e:
-                st.error(f"Failed to connect to API: {e}")
+                # This will print the EXACT python error if it fails
+                st.error(f"Failed to connect to API or parse data: {str(e)}")
 
-    # One clean render. No python variables assigned. No loops.
+    # if "saved_graph_html" in st.session_state:
+    #     components.html(st.session_state.saved_graph_html, height=800, scrolling=False)
+    # === FIX: Move banner outside so it stays visible! ===
     if "saved_graph_html" in st.session_state:
-        components.html(st.session_state.saved_graph_html, height=800, scrolling=False)
+        render_graph_health_banner(st.session_state.active_repo, layout_context="visualizer")
+        st.iframe(st.session_state.saved_graph_html, height=800)
+        

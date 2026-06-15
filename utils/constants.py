@@ -18,6 +18,7 @@ class SecurityConstraints():
     
 class AllowedTypes():
     SUPPORTED_EXTENSIONS = {
-    ".py", ".js", ".ts", ".jsx", ".tsx", 
-    ".java", ".cpp", ".c", ".h", ".go", ".rs"
-        }
+    ".py", ".ipynb", ".js", ".jsx", ".ts", ".tsx", ".html", ".css",
+    ".java", ".rs", ".go", ".php", ".c", ".h", ".cpp", ".hpp", 
+    ".cs", ".rb", ".swift", ".kt", ".r", ".sql", ".json", ".yaml", ".yml"
+    }

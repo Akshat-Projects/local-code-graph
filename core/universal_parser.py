@@ -1,6 +1,8 @@
 import networkx as nx
 from pathlib import Path
 import json
+# import threading
+
 # 1. Import Tree-sitter and Language Bindings
 import tree_sitter
 import tree_sitter_python as tspython
@@ -8,6 +10,17 @@ import tree_sitter_javascript as tsjavascript
 import tree_sitter_java as tsjava
 import tree_sitter_rust as tsrust
 import tree_sitter_html as tshtml
+import tree_sitter_css as tscss
+import tree_sitter_go as tsgo
+import tree_sitter_php as tsphp
+import tree_sitter_c as tsc
+import tree_sitter_cpp as tscpp
+import tree_sitter_c_sharp as tscsharp
+import tree_sitter_typescript as tstypescript
+import tree_sitter_ruby as tsruby
+import tree_sitter_swift as tsswift
+import tree_sitter_kotlin as tskotlin
+# import tree_sitter_r as tsr
 
 from utils.logger import get_logger
 
@@ -15,55 +28,77 @@ from utils.logger import get_logger
 logger = get_logger()
 
 
-# --- NEW: Version-Safe Tree-sitter Loader ---
-def get_ts_language(module):
+# --- Version-Safe Tree-sitter Loader ---
+def get_ts_language(module, language_name=None):
     """Safely loads grammars whether you are on tree-sitter v0.21 or v0.22+"""
     if hasattr(module, "LANGUAGE"):
         return module.LANGUAGE
+    # Some modules (like typescript) expose multiple languages (typescript vs tsx)
+    if language_name and hasattr(module, f"language_{language_name}"):
+        func = getattr(module, f"language_{language_name}")
+        return tree_sitter.Language(func())
     return tree_sitter.Language(module.language())
-
 
 # 2. Map Extensions to their Grammars
 LANGUAGE_CONFIG = {
-    ".py": {"lang": tree_sitter.Language(tspython.language()), "type": "python"},
+    ".py": {"lang": get_ts_language(tspython), "type": "python"},
     ".ipynb": {"lang": get_ts_language(tspython), "type": "python"},
-    ".js": {"lang": tree_sitter.Language(tsjavascript.language()), "type": "javascript"},
-    ".jsx": {"lang": tree_sitter.Language(tsjavascript.language()), "type": "javascript"},
-    ".java": {"lang": tree_sitter.Language(tsjava.language()), "type": "java"},
-    ".rs": {"lang": tree_sitter.Language(tsrust.language()), "type": "rust"},
-    ".html": {"lang": tree_sitter.Language(tshtml.language()), "type": "html"},
+    ".js": {"lang": get_ts_language(tsjavascript), "type": "javascript"},
+    ".jsx": {"lang": get_ts_language(tsjavascript), "type": "javascript"},
+    ".java": {"lang": get_ts_language(tsjava), "type": "java"},
+    ".rs": {"lang": get_ts_language(tsrust), "type": "rust"},
+    ".html": {"lang": get_ts_language(tshtml), "type": "html"},
+    ".css": {"lang": get_ts_language(tscss), "type": "css"},
+    
+    ".go": {"lang": get_ts_language(tsgo), "type": "go"},
+    ".php": {"lang": get_ts_language(tsphp, "php"), "type": "php"},
+    ".c": {"lang": get_ts_language(tsc), "type": "c"},
+    ".h": {"lang": get_ts_language(tsc), "type": "c"},
+    ".cpp": {"lang": get_ts_language(tscpp), "type": "cpp"},
+    ".hpp": {"lang": get_ts_language(tscpp), "type": "cpp"},
+    ".cs": {"lang": get_ts_language(tscsharp), "type": "c_sharp"},
+    ".rb": {"lang": get_ts_language(tsruby), "type": "ruby"},
+    ".swift": {"lang": get_ts_language(tsswift), "type": "swift"},
+    ".kt": {"lang": get_ts_language(tskotlin), "type": "kotlin"},
+    # ".r": {"lang": get_ts_language(tsr), "type": "r"},
+    
+    # TypeScript handles .ts and .tsx differently
+    ".ts": {"lang": get_ts_language(tstypescript, "typescript"), "type": "typescript"},
+    ".tsx": {"lang": get_ts_language(tstypescript, "tsx"), "type": "tsx"},
+
+    # Database & Configs (No structural extraction, just treated as file nodes)
+    ".sql": {"lang": None, "type": "sql"},
+    ".json": {"lang": None, "type": "json"},
+    ".yaml": {"lang": None, "type": "yaml"},
+    ".yml": {"lang": None, "type": "yaml"},
 }
 
 # 3. Define S-Expression Queries per Language
-# These tell Tree-sitter exactly how to find classes and functions.
 QUERIES = {
-    "python": """
-        (class_definition name: (identifier) @class)
-        (function_definition name: (identifier) @function)
-    """,
-    "javascript": """
-        (class_declaration name: (identifier) @class)
-        (function_declaration name: (identifier) @function)
-        (lexical_declaration (variable_declarator name: (identifier) @function value: (arrow_function)))
-        (method_definition name: (property_identifier) @function)
-    """,
-    "java": """
-        (class_declaration name: (identifier) @class)
-        (method_declaration name: (identifier) @function)
-    """,
-    "rust": """
-        (struct_item name: (type_identifier) @class)
-        (impl_item type: (type_identifier) @class)
-        (function_item name: (identifier) @function)
-    """,
-    "html": "" # HTML generally doesn't have structural code logic to extract in this way
+    "python": "(class_definition name: (identifier) @class) (function_definition name: (identifier) @function)",
+    "javascript": "(class_declaration name: (identifier) @class) (function_declaration name: (identifier) @function) (lexical_declaration (variable_declarator name: (identifier) @function value: (arrow_function))) (method_definition name: (property_identifier) @function)",
+    "typescript": "(class_declaration name: (type_identifier) @class) (interface_declaration name: (type_identifier) @class) (function_declaration name: (identifier) @function) (method_definition name: (property_identifier) @function)",
+    "tsx": "(class_declaration name: (type_identifier) @class) (function_declaration name: (identifier) @function) (lexical_declaration (variable_declarator name: (identifier) @function value: (arrow_function)))",
+    "java": "(class_declaration name: (identifier) @class) (method_declaration name: (identifier) @function)",
+    "rust": "(struct_item name: (type_identifier) @class) (impl_item type: (type_identifier) @class) (function_item name: (identifier) @function)",
+    "go": "(type_spec name: (type_identifier) @class) (function_declaration name: (identifier) @function) (method_declaration name: (field_identifier) @function)",
+    "php": "(class_declaration name: (name) @class) (method_declaration name: (name) @function) (function_declaration name: (name) @function)",
+    "c": "(struct_specifier name: (type_identifier) @class) (function_definition declarator: (function_declarator declarator: (identifier) @function))",
+    "cpp": "(class_specifier name: (type_identifier) @class) (struct_specifier name: (type_identifier) @class) (function_definition declarator: (function_declarator declarator: (identifier) @function))",
+    "c_sharp": "(class_declaration name: (identifier) @class) (method_declaration name: (identifier) @function)",
+    "ruby": "(class name: (constant) @class) (method name: (identifier) @function)",
+    "swift": "(class_declaration name: (type_identifier) @class) (struct_declaration name: (type_identifier) @class) (function_declaration name: (identifier) @function)",
+    "kotlin": "(class_declaration (simple_identifier) @class) (function_declaration (simple_identifier) @function)",
+    # "r": "(function_definition) @function",
+    "css": "(class_selector (class_name) @class) (id_selector (id_name) @function)",
+    "html": "", "sql": "", "json": "", "yaml": ""
 }
-
 
 class UniversalParser:
     def __init__(self, graph: nx.MultiDiGraph):
         self.graph = graph
         self.parsers = {}
+        # self._graph_lock = threading.Lock()
         
         # Pre-load parsers for efficiency
         for ext, config in LANGUAGE_CONFIG.items():
@@ -93,6 +128,20 @@ class UniversalParser:
         try:
             with open(absolute_path, "r", encoding="utf-8") as f:
                 source_code = f.read()
+                
+            # --- FIX: Re-added the Jupyter Notebook Interceptor ---
+            if ext == ".ipynb":
+                notebook = json.loads(source_code)
+                virtual_code = []
+                for cell in notebook.get("cells", []):
+                    if cell.get("cell_type") == "code":
+                        cell_source = cell.get("source", [])
+                        if isinstance(cell_source, list):
+                            virtual_code.append("".join(cell_source))
+                        else:
+                            virtual_code.append(cell_source)
+                source_bytes = "\n\n".join(virtual_code).encode("utf8")
+            else:
                 source_bytes = source_code.encode("utf8")
                 
             tree = parser.parse(source_bytes)
@@ -110,9 +159,8 @@ class UniversalParser:
         # Execute the query to find structural blocks
         language_obj = LANGUAGE_CONFIG[ext]["lang"]
         query = language_obj.query(QUERIES[lang_type])
-        # captures = query.captures(tree.root_node)
         
-        # --- FIX: Version-Safe Capture Extraction (Tree-sitter 0.22+ compatibility) ---
+        # --- Version-Safe Capture Extraction (Tree-sitter 0.22+ compatibility) ---
         captures = []
         if hasattr(query, "captures"):
             # Older API (< 0.22): returns a list of tuples [(Node, capture_name), ...]
@@ -140,11 +188,10 @@ class UniversalParser:
                         captures.append((item[0], item[1]))
                     else:
                         captures.append((item[1], item[0]))
-
+                        
         # Sort captures by their appearance in the file (top-to-bottom)
         # This guarantees we register a Class BEFORE we process its nested Methods!
         captures.sort(key=lambda x: x[0].start_byte)
-        # -----------------------------------------------------------------------------
 
         # Extract matches
         classes = {}
@@ -154,7 +201,6 @@ class UniversalParser:
             node_name = source_bytes[node.start_byte:node.end_byte].decode('utf8')
             start_line = node.start_point[0] + 1
             end_line = node.end_point[0] + 1
-        
 
             if capture_name == "class":
                 class_id = f"{relative_path}::{node_name}"
@@ -173,7 +219,6 @@ class UniversalParser:
                 func_id = f"{parent_class_id}::{node_name}" if parent_class_id else f"{relative_path}::{node_name}"
                 self._register_function(func_id, node_name, relative_path, file_node_id, parent_class_id, start_line, end_line)
 
-
     # ─────────────────────────────────────────────
     # Tree-sitter Helper
     # ─────────────────────────────────────────────
@@ -187,7 +232,7 @@ class UniversalParser:
         return False
 
     # ─────────────────────────────────────────────
-    # Graph Registration (Identical to your old code)
+    # Graph Registration
     # ─────────────────────────────────────────────
     def _register_file_node(self, relative_path: str, file_hash: str) -> str:
         file_node_id = f"file::{relative_path}"
@@ -203,22 +248,9 @@ class UniversalParser:
         )
         self.graph.add_edge(file_id, class_node_id, relation="contains")
 
-    # def _register_function(self, func_node_id, name, path, file_id, parent_class_id, start, end):
-    #     self.graph.add_node(
-    #         func_node_id, type="function", name=name, file_path=path,
-    #         parent_class=parent_class_id, line_start=start, line_end=end, 
-    #         signature=f"{name}()", summary="", analysis_status="pending"
-    #     )
-    #     if parent_class_id:
-    #         self.graph.add_edge(parent_class_id, func_node_id, relation="defines")
-    #     else:
-    #         self.graph.add_edge(file_id, func_node_id, relation="contains")
-            
-    
     def _register_function(self, func_node_id, name, path, file_id, parent_class_id, start, end):
         self.graph.add_node(
             func_node_id, type="function", name=name, file_path=path,
-            # --- THE LIFESAVER: Change None to "" ---
             parent_class=parent_class_id or "", 
             line_start=start, line_end=end, 
             signature=f"{name}()", summary="", analysis_status="pending"

@@ -13,7 +13,7 @@ from utils.helper import timeit, validate_ingestion_path
 from intelligence_layer.kernel_client import LocalKernelFactory
 from core.vector_operations import HybridVectorStore
 from intelligence_layer.kernel_client import CodebaseSearchPlugin
-from utils.global_cache import GRAPH_CACHE, GRAPH_MTIME
+from utils.global_cache import load_graph_cached
 from intelligence_layer.prompts import GRAPH_RAG_PROMPT, AGENT_PROMPT
 
 logger = get_logger()
@@ -117,197 +117,14 @@ class GraphQueryEngine:
                     
             return G.subgraph(subgraph_nodes)
        
-    # def _get_relevant_subgraph(self, G: nx.Graph, query: str, top_k: int = 5) -> nx.Graph:
-    #     """
-    #     Retrieves a structurally and semantically dense subgraph using Personalized PageRank (PPR).
-    #     Uses semantic keyword overlap as a seed vector.
-    #     """
-    #     # query_terms = {word.lower() for word in query.split() if len(word) > 3}
-        
-    #     # seed_nodes = {}
-    #     # for node, data in G.nodes(data=True):
-    #     #     score = 0
-    #     #     text_to_search = f"{node} {data.get('name', '')} {data.get('summary', '')}".lower()
-    #     #     for term in query_terms:
-    #     #         if term in text_to_search:
-    #     #             score += 1
-    #     #     if score > 0:
-    #     #         seed_nodes[node] = float(score)
-    #     # --- NEW: EXACT STRING MATCH BYPASS ---
-    #     # If the query looks like a specific code reference, check the raw node names first
-    #     exact_matches = [node for node in G.nodes() if query.lower() in str(node).lower()]
-    #     if exact_matches:
-    #         logger.info(f"Exact node name match found for '{query}'!")
-    #         subgraph_nodes = set(exact_matches)
-    #         for node in exact_matches:
-    #             if G.is_directed():
-    #                 subgraph_nodes.update(G.successors(node))
-    #                 subgraph_nodes.update(G.predecessors(node))
-    #             else:
-    #                 subgraph_nodes.update(G.neighbors(node))
-    #         return G.subgraph(subgraph_nodes)
-        
-    #     # 1. Hybrid Semantic + Keyword Search
-    #     top_semantic_nodes = self.vector_store.search(query, top_k=15)
-        
-    #     seed_nodes = {}
-    #     for rank, node_id in enumerate(top_semantic_nodes):
-    #         # We give the highest ranked result a score of 5, the next 4, etc.
-    #         # This perfectly seeds the PageRank algorithm!
-    #         seed_nodes[node_id] = float(len(top_semantic_nodes) - rank)
 
-    #     # --- FIX 1: Context Window Safety (No Full Graph Fallback) ---
-    #     if not seed_nodes:
-    #         logger.info("No direct keyword matches found. Extracting central architectural hubs.")
-    #         hub_nodes = sorted(G.degree, key=lambda x: x[1], reverse=True)[:top_k]
-    #         subgraph_nodes = {node for node, _ in hub_nodes}
-            
-    #         # Grab immediate neighbors to ensure the LLM gets context, not isolated points
-    #         for node in list(subgraph_nodes):
-    #             if G.is_directed():
-    #                 subgraph_nodes.update(G.successors(node))
-    #                 subgraph_nodes.update(G.predecessors(node))
-    #             else:
-    #                 subgraph_nodes.update(G.neighbors(node))
-    #         return G.subgraph(subgraph_nodes)
-
-    #     total_score = sum(seed_nodes.values())
-    #     personalization = {node: score / total_score for node, score in seed_nodes.items()}
-
-    #     # --- FIX 2: Multi-Graph to DiGraph Flattening ---
-    #     try:
-    #         # Flatten parallel edges (MultiDiGraph) into single edges (DiGraph)
-    #         # This makes structural logic unweighted, which is perfect for code traversal
-    #         if G.is_multigraph():
-    #             calc_graph = nx.DiGraph(G) if G.is_directed() else nx.Graph(G)
-    #         else:
-    #             calc_graph = G
-
-    #         # Run PPR. 85% chance to follow code paths, 15% chance to teleport back to the keyword match
-    #         pr_scores = nx.pagerank(calc_graph, alpha=0.85, personalization=personalization, max_iter=100)
-            
-    #         target_expansion_limit = top_k * 3
-    #         top_structural_nodes = sorted(pr_scores, key=pr_scores.get, reverse=True)[:target_expansion_limit]
-            
-    #         subgraph_nodes = set(top_structural_nodes)
-    #         logger.info(f"Successfully generated structural PPR subgraph with {len(subgraph_nodes)} nodes.")
-    #         return G.subgraph(subgraph_nodes)
-
-    #     except Exception as e:
-    #         logger.warning(f"PageRank computation failed or bypassed: {e}. Falling back to 1-hop neighborhood.")
-            
-    #         top_nodes = sorted(seed_nodes, key=seed_nodes.get, reverse=True)[:top_k]
-    #         subgraph_nodes = set(top_nodes)
-    #         for node in top_nodes:
-    #             try:
-    #                 if G.is_directed():
-    #                     subgraph_nodes.update(G.successors(node))
-    #                     subgraph_nodes.update(G.predecessors(node))
-    #                 else:
-    #                     subgraph_nodes.update(G.neighbors(node))
-    #             except AttributeError:
-    #                 subgraph_nodes.update(G.neighbors(node))
-                    
-    #         return G.subgraph(subgraph_nodes)
-    # def _get_relevant_subgraph(self, G: nx.Graph, query: str, top_k: int = 5) -> nx.Graph:
-    #     """
-    #     Retrieves the most relevant nodes based on keyword overlap,
-    #     plus their immediate neighbors for structural context.
-    #     """
-    #     # 1. Simple Keyword Extraction (ignore tiny words)
-    #     query_terms = {word.lower() for word in query.split() if len(word) > 3}
-       
-    #     node_scores = {}
-    #     for node, data in G.nodes(data=True):
-    #         score = 0
-    #         text_to_search = f"{node} {data.get('summary', '')} {data.get('signature', '')}".lower()
-    #         for term in query_terms:
-    #             if term in text_to_search:
-    #                 score += 1
-    #         if score > 0:
-    #             node_scores[node] = score
-               
-    #     # 2. Fallback: If no keywords match, return the whole graph
-    #     # if not node_scores:
-    #     #     logger.info("No direct keyword matches found. Falling back to full graph context.")
-    #     #     return G
-           
-    #     # 2. Fallback: If no keywords match, do NOT return the whole graph!
-    #     if not node_scores:
-    #         logger.info("No direct keyword matches found. Falling back to architectural hubs.")
-    #         # Grab the top 5 most highly connected nodes in the graph
-    #         hub_nodes = sorted(G.degree, key=lambda x: x[1], reverse=True)[:top_k]
-    #         subgraph_nodes = {node for node, _ in hub_nodes}
-            
-    #         # Add their neighbors so the graph isn't disconnected
-    #         for node in list(subgraph_nodes):
-    #             try:
-    #                 subgraph_nodes.update(G.successors(node))
-    #                 subgraph_nodes.update(G.predecessors(node))
-    #             except AttributeError:
-    #                 subgraph_nodes.update(G.neighbors(node))
-                    
-    #         return G.subgraph(subgraph_nodes)
-        
-        
-    #     # 3. Get Top-K highest scoring nodes
-    #     top_nodes = sorted(node_scores, key=node_scores.get, reverse=True)[:top_k]
-       
-    #     # 4. Context Expansion: Add their 1-hop neighbors
-    #     subgraph_nodes = set(top_nodes)
-    #     for node in top_nodes:
-    #         # If the graph is directed, use list(G.successors(node)) + list(G.predecessors(node))
-    #         # If undirected, use G.neighbors(node)
-    #         try:
-    #             subgraph_nodes.update(G.successors(node))
-    #             subgraph_nodes.update(G.predecessors(node))
-    #         except AttributeError:
-    #             subgraph_nodes.update(G.neighbors(node))
-           
-    #     logger.info(f"Extracted subgraph with {len(subgraph_nodes)} nodes based on query.")
-    #     return G.subgraph(subgraph_nodes)
-   
-   
-    # def _load_graph(self):
-    #     current_mtime = os.path.getmtime(
-    #         self.graph_path
-    #     )
-    #     if (self._graph_cache is None or self._graph_mtime != current_mtime):
-    #         logger.info("Reloading graph cache...")
-    #         self._graph_cache = nx.read_graphml(
-    #             self.graph_path,
-    #             node_type=str
-    #         )
-    #         self._graph_mtime = current_mtime
-
-    #     return self._graph_cache
-    def _load_graph(self):
-        current_mtime = os.path.getmtime(self.graph_path)
-        if (
-            self.graph_path not in GRAPH_CACHE
-            or GRAPH_MTIME[self.graph_path]
-            != current_mtime
-        ):
-            logger.info("Reloading graph cache...")
-            GRAPH_CACHE[self.graph_path] = (
-                nx.read_graphml(
-                    self.graph_path,
-                    node_type=str
-                )
-            )
-            GRAPH_MTIME[self.graph_path] = (
-                current_mtime
-            )
-        return GRAPH_CACHE[self.graph_path]
+    async def _load_graph(self):
+        return await load_graph_cached(self.graph_path)
    
     @timeit
     async def _build_context_payload(self, user_query: str, chat_history: str = "") -> str:
         try:
-            # G = nx.read_graphml(self.graph_path, node_type=str)
-            # G = self._load_graph()
-            G = await asyncio.to_thread(
-                    self._load_graph
-                )
+            G = await self._load_graph()
         except Exception as e:
             logger.error(f"Failed to load graph database: {e}")
             raise FileNotFoundError("Graph database not found.")
@@ -369,54 +186,6 @@ class GraphQueryEngine:
                     logger.error(f"FAIL: Could not read source file {full_path}: {e}")
             else:
                 logger.error(f"FAIL: File not found on disk at absolute path: {full_path}")
-        # context_lines.append("\n## Relevant Raw Source Code")
-       
-        # # Find all unique files associated with our highly relevant subgraph
-        # file_scores = {}
-        # for node_id, node_data in filtered_G.nodes(data=True):
-
-        #     file_path = node_data.get("file_path")
-            
-        #     # 2. Fallback: Parse from node ID (e.g., "blood.py::find_blood_drop_center" or "file::blood.py")
-        #     if not file_path:
-        #         node_str = str(node_id)
-        #         if node_str.startswith("file::"):
-        #             file_path = node_str.replace("file::", "")
-        #         elif "::" in node_str:
-        #             file_path = node_str.split("::")[0]
-
-        #     # if not file_path:
-        #     #     continue
-
-        #     # file_scores[file_path] = (
-        #     #     file_scores.get(file_path, 0)
-        #     #     + 1
-        #     # )
-        #     # If the user specifically searched for this node, bump its score massively
-        #     # so its parent file is guaranteed to be injected!
-        #     score_bump = 50 if user_query.lower() in str(node_id).lower() else 1
-        #     file_scores[file_path] = file_scores.get(file_path, 0) + score_bump
-            
-            
-        # top_files = sorted(file_scores, key=file_scores.get, reverse=True)[:3]
-        # logger.info(f"Injecting raw code for files: {top_files}")
-
-        # for rel_path in top_files: # Cap at top 3 files to save GPU memory
-        #     full_path = os.path.join(self.target_repo_path, rel_path)
-        #     if os.path.exists(full_path):
-        #         try:
-        #             # with open(full_path, "r", encoding="utf-8") as f:
-        #                 # code_content = f.read()
-        #             code_content = await asyncio.to_thread(
-        #                     Path(full_path).read_text,
-        #                     encoding="utf-8"
-        #                 )
-        #             context_lines.append(f"\n### File: {rel_path}\n```python\n{code_content}\n```")
-        #         except Exception as e:
-        #             logger.warning(f"Could not read source file {full_path}: {e}")
-        #         # with open(full_path, "r", encoding="utf-8") as f:
-        #         #     code_content = f.read()
-        #         #     context_lines.append(f"\n### File: {rel_path}\n```python\n{code_content}\n```")
 
         return "\n".join(context_lines)
 
@@ -507,38 +276,7 @@ class GraphQueryEngine:
                 user_query=user_query,
                 settings=execution_settings)
             final_prompt = GRAPH_RAG_PROMPT
-        # logger.info(f"Assembling graph context for query: '{user_query}'")
-        # # graph_context = await self._build_context_payload(user_query=user_query)
-        # # 1. Ask the Traffic Cop
-        # intent = await self._route_query(user_query, chat_history)
-       
-        # # Configure Dynamic Limits
-        # execution_settings = OpenAIChatPromptExecutionSettings(
-        #     max_tokens=max_tokens if max_tokens and max_tokens > 0 else 4096,
-        #     tool_choice="auto"
-        # )
-     
-        # arguments = KernelArguments(
-        #     # graph_context=graph_context,
-        #     # chat_history=chat_history,
-        #     # user_query=user_query,
-        #     settings=execution_settings)
-       
-        # logger.info("Routing streaming query to local Gemma 4 instance...")
         
-        # AGENT_PROMPT = f"""You are a Principal Software Engineer assistant.
-        #     You have access to a tool called `search_codebase`. 
-
-        #     RULES:
-        #     1. If the user asks about previous messages, answer directly using the Chat History.
-        #     2. If the user asks about the code, architecture, or technical details, you MUST call `search_codebase` to get the context first.
-        #     3. Do not invent code. If the tool returns no useful context, say so.
-
-        #     Chat History:
-        #     {chat_history}
-
-        #     User: {user_query}
-        #     """
        
         try:
             # The ONE and ONLY inference loop

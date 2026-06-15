@@ -4,7 +4,7 @@ logs
 .localgraph
 graphify-out
 data
-my_mock_test
+# my_mock_test
 gemma_meta*
 gguf_inspect.py
 

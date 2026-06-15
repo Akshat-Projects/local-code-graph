@@ -1,10 +1,6 @@
 import json
 import streamlit as st
 
-import json
-import streamlit as st
-
-
 def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_legend, js_physics_config):
     API_BASE = api_base
     html_head = """
@@ -15,6 +11,29 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     <script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
+        /* --- MODERN SCROLLBAR STYLING --- */
+        /* WebKit (Chrome, Edge, Safari) */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1a1a2e; /* Matches your sidebar background */
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #3a3a5e; /* Distinct, but fits the dark tone */
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4E79A7; /* Highlights using your primary graph color */
+        }
+
+        /* Firefox */
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: #3a3a5e #1a1a2e;
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background: #0f0f1a; color: #e0e0e0; font-family: -apple-system, sans-serif; display: flex; height: 100vh; overflow: hidden; position: relative; }
         #graph { flex: 1; }
@@ -66,7 +85,6 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         /* --- POP-OUT CHAT STYLES --- */
         #node-chat-wrap { display: none; padding: 14px; border-bottom: 1px solid #2a2a4e; flex-direction: column; gap: 8px; background: #1a1a2e; transition: all 0.2s ease; }
         
-        /* This class will trigger when clicking the ⤢ button */
         #node-chat-wrap.popped-out {
             position: absolute;
             top: 20px;
@@ -134,13 +152,19 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     <script>
     """
 
+    # --- HTML TAG COLLISION ESCAPE ---
+    safe_js_nodes = js_nodes.replace("</", r"\/")
+    safe_js_edges = js_edges.replace("</", r"\/")
+    safe_js_legend = js_legend.replace("</", r"\/")
+
+    # --- PROPER VARIABLE SCOPING ---
     js_data = f"""
     const API_BASE = {json.dumps(API_BASE)};
-    const REPO_NAME = {json.dumps(st.session_state.active_repo)};
-    const TARGET_PATH = {json.dumps(st.session_state.target_path)};
-    const RAW_NODES = {js_nodes};
-    const RAW_EDGES = {js_edges};
-    const LEGEND = {js_legend};
+    const REPO_NAME = {json.dumps(repo_name)};
+    const TARGET_PATH = {json.dumps(target_path)};
+    const RAW_NODES = {safe_js_nodes};
+    const RAW_EDGES = {safe_js_edges};
+    const LEGEND = {safe_js_legend};
     """
     
     js_logic = """
@@ -148,23 +172,30 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     }
 
-    // --- NEW: VIRTUAL DOM STATE MANAGEMENT ---
-    // Instead of strings, we hold actual HTML Divs for every node!
     const nodeChatHistories = {};
-    // -----------------------------
 
-    const nodesDS = new vis.DataSet(RAW_NODES.map(n => ({
-        id: n.id, label: n.label, size: n.size, font: n.font, title: n.title, shape: n.shape,
-        _community: n.community, _community_name: n.community_name, _file_type: n._file_type,
-        _is_pending: n._is_pending,
-        color: n._is_pending ? { background: n.color.background, border: '#F28E2B' } : n.color,
-        borderWidth: n._is_pending ? 3 : 1.5,
-        shapeProperties: { borderDashes: n._is_pending ? [4, 4] : false }
-    })));
+    const nodesDS = new vis.DataSet(RAW_NODES.map(n => {
+        let bg = '#4E79A7';
+        let bd = '#4E79A7';
+        if (n && n.color) {
+            bg = n.color.background || bg;
+            bd = n.color.border || bd;
+        }
+        
+        return {
+            id: n.id, label: n.label, size: n.size, font: n.font, title: n.title, shape: n.shape,
+            group: n.group, 
+            _community: n.community, _community_name: n.community_name, _file_type: n._file_type,
+            _is_pending: n._is_pending,
+            color: n._is_pending ? { background: bg, border: '#F28E2B' } : { background: bg, border: bd },
+            borderWidth: n._is_pending ? 3 : 1.5,
+            shapeProperties: { borderDashes: n._is_pending ? [4, 4] : false }
+        };
+    }));
 
     const edgesDS = new vis.DataSet(RAW_EDGES.map((e, i) => ({
         id: i, from: e.from, to: e.to, label: e.label,
-        width: e.width, color: e.color,
+        width: e.width || 0.4, color: e.color || '#4a5568',
         arrows: { to: { enabled: true, scaleFactor: 1 } },
     })));
 
@@ -176,12 +207,11 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         edges: { smooth: { type: 'continuous', roundness: 0.2 }, selectionWidth: 3 },
     });
 
-    // --- THE LOADING SCREEN FIX ---
     function freezeAndShow() {
         if (network.physics) {
-            network.physics.stopSimulation();  // 1. Halt the calculation loop immediately
+            network.physics.stopSimulation(); 
         }
-        network.setOptions({ physics: false });  // 2. Erase the physics configuration permanently
+        network.setOptions({ physics: false }); 
         
         const overlay = document.getElementById('loading-overlay');
         if (overlay) {
@@ -190,12 +220,10 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         }
     }
 
-    // 3. Catch ALL possible stabilization events to guarantee shutdown
     network.once('stabilizationIterationsDone', freezeAndShow);
     network.once('stabilized', freezeAndShow);
-    setTimeout(freezeAndShow, 1500);  // Failsafe guarantees loader dies after 1.5s
+    setTimeout(freezeAndShow, 1500); 
 
-    // --- SEARCH DEBOUNCER ---
     let searchTimeout = null;
     const searchInput = document.getElementById('search');
     const searchResults = document.getElementById('search-results');
@@ -225,7 +253,6 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         if (!searchResults.contains(e.target) && e.target !== searchInput) searchResults.style.display = 'none';
     });
 
-    // --- ISOLATION & CAMERA ---
     let currentSelectedNode = null;
     const hiddenCommunities = new Set();
 
@@ -257,7 +284,6 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
 
     document.getElementById('isolate-cb').addEventListener('change', applyIsolation);
 
-    // --- NODE SELECTION & UI ---
     function showInfo(nodeId) {
         const n = nodesDS.get(nodeId);
         if (!n) return;
@@ -304,8 +330,6 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         
         chatWrap.style.display = 'flex';
         
-        // --- MOUNT THE VIRTUAL DOM ---
-        // If we haven't chatted with this node yet, create its container
         if (!nodeChatHistories[nodeId]) {
             const wrapper = document.createElement('div');
             wrapper.style.display = 'flex';
@@ -315,7 +339,6 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
             nodeChatHistories[nodeId] = wrapper;
         }
         
-        // Clear the screen and attach this specific node's container
         chatHistory.innerHTML = '';
         chatHistory.appendChild(nodeChatHistories[nodeId]);
         chatHistory.scrollTop = chatHistory.scrollHeight;
@@ -333,10 +356,8 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         document.getElementById('info-content').innerHTML = '<span class="empty">Click a node to inspect it</span>';
         applyIsolation();
         chatWrap.style.display = 'none';
-        // Note: We don't delete the nodeChatHistories object. It just sits safely in the background!
     });
 
-    // --- POP-OUT MODE ---
     popoutToggle.addEventListener('click', () => {
         const isPoppedOut = chatWrap.classList.toggle('popped-out');
         if (isPoppedOut) {
@@ -365,23 +386,18 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
             const question = chatInput.value.trim();
             chatInput.value = '';
             
-            // --- BACKGROUND STREAMING LOCK ---
-            // Lock the node instance so we stream into the right container even if the user clicks away
             const activeNode = currentSelectedNode;
             const activeWrapper = nodeChatHistories[activeNode];
             
-            // Use insertAdjacentHTML so we don't destroy DOM references
             activeWrapper.insertAdjacentHTML('beforeend', `<div style="color: #F6E05E; margin-bottom: 6px;"><b>You:</b> ${esc(question)}</div>`);
             
             const msgId = 'ai-msg-' + Date.now();
             activeWrapper.insertAdjacentHTML('beforeend', `<div style="color: #e0e0e0; margin-bottom: 12px;"><b>AI:</b> <span id="${msgId}" style="color: #aaa; font-style: italic;">Thinking...</span></div>`);
             
-            // Only scroll the screen if the user is currently looking at THIS node
             if (currentSelectedNode === activeNode) {
                 chatHistory.scrollTop = chatHistory.scrollHeight;
             }
             
-            // Find the AI text container inside our active wrapper
             const aiContainer = activeWrapper.querySelector('#' + msgId);
             let fullMarkdown = "";
             let isFirstChunk = true;
@@ -427,7 +443,7 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         }
     });
 
-    --- LEGEND LOGIC ---
+    // --- LEGEND LOGIC ---
     const selectAllCb = document.getElementById('select-all-cb');
     function updateSelectAllState() {
         const total = LEGEND.length; const hidden = hiddenCommunities.size;
@@ -458,290 +474,6 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         legendEl.appendChild(item);
     });
     """
-
-    # js_logic = """
-    # function esc(s) {
-    #     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-    # }
-
-    # const nodesDS = new vis.DataSet(RAW_NODES.map(n => ({
-    #     id: n.id, label: n.label, size: n.size, font: n.font, title: n.title, shape: n.shape,
-    #     _community: n.community, _community_name: n.community_name, _file_type: n._file_type,
-    #     _is_pending: n._is_pending,
-    #     color: n._is_pending ? { background: n.color.background, border: '#F28E2B' } : n.color,
-    #     borderWidth: n._is_pending ? 3 : 1.5,
-    #     shapeProperties: { borderDashes: n._is_pending ? [4, 4] : false }
-    # })));
-
-    # const edgesDS = new vis.DataSet(RAW_EDGES.map((e, i) => ({
-    #     id: i, from: e.from, to: e.to, label: e.label,
-    #     width: e.width, color: e.color,
-    #     arrows: { to: { enabled: true, scaleFactor: 1 } },
-    # })));
-
-    # const container = document.getElementById('graph');
-    # const network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, {
-    #     """ + js_physics_config + """
-    #     interaction: { hover: true, tooltipDelay: 100, hideEdgesOnDrag: true },
-    #     nodes: { borderWidth: 1.5 },
-    #     edges: { smooth: { type: 'continuous', roundness: 0.2 }, selectionWidth: 3 },
-    # });
-
-    # function freezeAndShow() {
-    #     if (network.physics) {
-    #         network.physics.stopSimulation();
-    #     }
-    #     network.setOptions({ physics: false });
-        
-    #     const overlay = document.getElementById('loading-overlay');
-    #     if (overlay) {
-    #         overlay.style.opacity = '0';
-    #         setTimeout(() => overlay.style.display = 'none', 300);
-    #     }
-    # }
-
-    # network.once('stabilizationIterationsDone', freezeAndShow);
-    # network.once('stabilized', freezeAndShow);
-    # setTimeout(freezeAndShow, 1500);
-
-    # let searchTimeout = null;
-    # const searchInput = document.getElementById('search');
-    # const searchResults = document.getElementById('search-results');
-
-    # searchInput.addEventListener('input', () => {
-    #     clearTimeout(searchTimeout);
-    #     searchTimeout = setTimeout(() => {
-    #         const q = searchInput.value.toLowerCase().trim();
-    #         searchResults.innerHTML = '';
-    #         if (!q) { searchResults.style.display = 'none'; return; }
-            
-    #         const matches = RAW_NODES.filter(n => n.label.toLowerCase().includes(q)).slice(0, 20);
-    #         if (!matches.length) { searchResults.style.display = 'none'; return; }
-            
-    #         searchResults.style.display = 'block';
-    #         matches.forEach(n => {
-    #         const el = document.createElement('div');
-    #         el.className = 'search-item'; el.textContent = n.label;
-    #         el.style.borderLeft = `3px solid ${n.color.background}`; el.style.paddingLeft = '8px';
-    #         el.onclick = () => { focusNode(n.id); searchResults.style.display = 'none'; searchInput.value = ''; };
-    #         searchResults.appendChild(el);
-    #         });
-    #     }, 250); 
-    # });
-
-    # document.addEventListener('click', e => {
-    #     if (!searchResults.contains(e.target) && e.target !== searchInput) searchResults.style.display = 'none';
-    # });
-
-    # let currentSelectedNode = null;
-    # const hiddenCommunities = new Set();
-
-    # function applyIsolation() {
-    #     const isolate = document.getElementById('isolate-cb').checked;
-    #     if (isolate && currentSelectedNode) {
-    #     const neighbors = network.getConnectedNodes(currentSelectedNode);
-    #     const visibleNodes = [currentSelectedNode, ...neighbors];
-    #     const visibleSet = new Set(visibleNodes);
-        
-    #     const updates = RAW_NODES.map(n => ({
-    #         id: n.id, hidden: hiddenCommunities.has(n.community) || !visibleSet.has(n.id)
-    #     }));
-    #     nodesDS.update(updates);
-    #     setTimeout(() => { network.fit({ nodes: visibleNodes, animation: true, padding: 50 }); }, 50);
-    #     } else {
-    #     const updates = RAW_NODES.map(n => ({
-    #         id: n.id, hidden: hiddenCommunities.has(n.community)
-    #     }));
-    #     nodesDS.update(updates);
-        
-    #     if (currentSelectedNode) {
-    #         setTimeout(() => { network.focus(currentSelectedNode, { scale: 1.2, animation: true }); }, 50);
-    #     } else {
-    #         setTimeout(() => { network.fit({ animation: true }); }, 50);
-    #     }
-    #     }
-    # }
-
-    # document.getElementById('isolate-cb').addEventListener('change', applyIsolation);
-
-    # function showInfo(nodeId) {
-    #     const n = nodesDS.get(nodeId);
-    #     if (!n) return;
-    #     const neighborIds = network.getConnectedNodes(nodeId);
-    #     const neighborItems = neighborIds.map(nid => {
-    #     const nb = nodesDS.get(nid);
-    #     const color = nb ? (nb._is_pending ? '#F28E2B' : nb.color.background) : '#555';
-    #     return `<span class="neighbor-link" style="border-left-color:${esc(color)}" onclick="focusNode(${JSON.stringify(nid)})">${esc(nb ? nb.label : nid)}</span>`;
-    #     }).join('');
-        
-    #     const pendingWarning = n._is_pending 
-    #     ? `<div style="background: rgba(242, 142, 43, 0.1); border: 1px solid #F28E2B; color: #F28E2B; padding: 6px; border-radius: 4px; margin-bottom: 8px; font-weight: bold; font-size: 11px;">⚠️ Pending LLM Summarization</div>` 
-    #     : '';
-
-    #     document.getElementById('info-content').innerHTML = `
-    #     ${pendingWarning}
-    #     <div class="field"><b>${esc(n.label)}</b></div>
-    #     <div class="field">Type: ${esc(n._file_type || 'unknown')}</div>
-    #     <div class="field">Community: ${esc(n._community_name)}</div>
-    #     ${neighborIds.length ? `<div class="field" style="margin-top:8px;color:#aaa;font-size:11px">Neighbors (${neighborIds.length})</div><div id="neighbors-list">${neighborItems}</div>` : ''}
-    #     `;
-    # }
-
-    # function focusNode(nodeId) {
-    #     currentSelectedNode = nodeId;
-    #     network.selectNodes([nodeId]);
-    #     showInfo(nodeId);
-    #     applyIsolation(); 
-        
-    #     const n = nodesDS.get(nodeId);
-    #     const warningElement = document.getElementById('node-chat-pending-warning');
-        
-    #     if (n && n._is_pending) {
-    #     warningElement.style.display = 'block';
-    #     warningElement.innerHTML = "⏳ LLM summarization pending for this component...";
-    #     } else {
-    #     warningElement.style.display = 'none';
-    #     }
-        
-    #     chatWrap.style.display = 'flex';
-    #     chatHistory.innerHTML = '';
-    # }
-
-    # network.on('hoverNode', params => { container.style.cursor = 'pointer'; });
-    # network.on('blurNode', () => { container.style.cursor = 'default'; });
-
-    # network.on('selectNode', params => {
-    #     currentSelectedNode = params.nodes[0];
-    #     showInfo(currentSelectedNode);
-    #     applyIsolation();
-        
-    #     const n = nodesDS.get(currentSelectedNode);
-    #     const warningElement = document.getElementById('node-chat-pending-warning');
-        
-    #     if (n && n._is_pending) {
-    #     warningElement.style.display = 'block';
-    #     warningElement.innerHTML = "⏳ LLM summarization pending for this component...";
-    #     } else {
-    #     warningElement.style.display = 'none';
-    #     }
-        
-    #     chatWrap.style.display = 'flex';
-    #     chatHistory.innerHTML = '';
-    # });
-
-    # network.on('deselectNode', () => {
-    #     currentSelectedNode = null;
-    #     document.getElementById('info-content').innerHTML = '<span class="empty">Click a node to inspect it</span>';
-    #     applyIsolation();
-    #     chatWrap.style.display = 'none';
-    # });
-
-    # const chatWrap = document.getElementById('node-chat-wrap');
-    # const chatHistory = document.getElementById('node-chat-history');
-    # const chatInput = document.getElementById('node-chat-input');
-    # const popoutToggle = document.getElementById('chat-popout-toggle');
-
-    # // --- TOGGLE POP-OUT MODE WINDOW MECHANISM ---
-    # popoutToggle.addEventListener('click', () => {
-    #     const isPoppedOut = chatWrap.classList.toggle('popped-out');
-    #     if (isPoppedOut) {
-    #         // Append panel directly to body so it floats over graph cleanly
-    #         document.body.appendChild(chatWrap);
-    #         popoutToggle.innerText = '⤡'; // Icon change to signify closing back to sidebar
-    #         popoutToggle.style.transform = 'rotate(45deg)';
-    #     } else {
-    #         // Put it back into the sidebar flow right before the legend wrapper
-    #         const legendWrap = document.getElementById('legend-wrap');
-    #         document.getElementById('sidebar').insertBefore(chatWrap, legendWrap);
-    #         popoutToggle.innerText = '⤢';
-    #         popoutToggle.style.transform = 'none';
-    #     }
-    # });
-
-    # chatInput.addEventListener('keypress', async function(e) {
-    #     if (e.key === 'Enter' && chatInput.value.trim() !== '') {
-    #         const question = chatInput.value.trim();
-    #         chatInput.value = '';
-            
-    #         chatHistory.innerHTML += `<div style="color: #F6E05E; margin-bottom: 6px;"><b>You:</b> ${esc(question)}</div>`;
-    #         chatHistory.scrollTop = chatHistory.scrollHeight;
-            
-    #         const msgId = 'ai-msg-' + Date.now();
-    #         chatHistory.innerHTML += `<div style="color: #e0e0e0; margin-bottom: 12px;"><b>AI:</b> <span id="${msgId}" style="color: #aaa; font-style: italic;">Thinking...</span></div>`;
-    #         chatHistory.scrollTop = chatHistory.scrollHeight;
-            
-    #         const aiContainer = document.getElementById(msgId);
-    #         let fullMarkdown = "";
-    #         let isFirstChunk = true;
-
-    #         try {
-    #             const response = await fetch(`${API_BASE}/query/node/${REPO_NAME}`, {
-    #                 method: 'POST',
-    #                 headers: { 'Content-Type': 'application/json' },
-    #                 body: JSON.stringify({ node_id: currentSelectedNode, question: question, target_path: TARGET_PATH })
-    #             });
-                
-    #             if (!response.ok) {
-    #                 aiContainer.innerHTML = `<span style="color: #E15759;">Error: ${response.statusText}</span>`;
-    #                 return;
-    #             }
-
-    #             const reader = response.body.getReader();
-    #             const decoder = new TextDecoder("utf-8");
-
-    #             while (true) {
-    #                 const { done, value } = await reader.read();
-    #                 if (done) break;
-                    
-    #                 if (isFirstChunk) {
-    #                     aiContainer.innerHTML = ""; 
-    #                     aiContainer.style.fontStyle = "normal";
-    #                     aiContainer.classList.add("md-content");
-    #                     isFirstChunk = false;
-    #                 }
-                    
-    #                 const chunkText = decoder.decode(value, { stream: true });
-    #                 fullMarkdown += chunkText;
-                    
-    #                 aiContainer.innerHTML = marked.parse(fullMarkdown);
-    #                 chatHistory.scrollTop = chatHistory.scrollHeight;
-    #             }
-    #         } catch (error) {
-    #             aiContainer.innerHTML = `<span style="color: #E15759;">Connection lost.</span>`;
-    #         }
-    #     }
-    # });
-
-    # const selectAllCb = document.getElementById('select-all-cb');
-    # function updateSelectAllState() {
-    #     const total = LEGEND.length; const hidden = hiddenCommunities.size;
-    #     selectAllCb.checked = hidden === 0; selectAllCb.indeterminate = hidden > 0 && hidden < total;
-    # }
-    # function toggleAllCommunities(hide) {
-    #     document.querySelectorAll('.legend-item').forEach(item => { hide ? item.classList.add('dimmed') : item.classList.remove('dimmed'); });
-    #     document.querySelectorAll('.legend-cb').forEach(cb => { cb.checked = !hide; });
-    #     LEGEND.forEach(c => { if (hide) hiddenCommunities.add(c.cid); else hiddenCommunities.delete(c.cid); });
-    #     applyIsolation(); 
-    #     updateSelectAllState();
-    # }
-
-    # const legendEl = document.getElementById('legend');
-    # LEGEND.forEach(c => {
-    #     const item = document.createElement('div'); item.className = 'legend-item';
-    #     const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'legend-cb'; cb.checked = true;
-    #     cb.addEventListener('change', (e) => {
-    #     e.stopPropagation();
-    #     if (cb.checked) { hiddenCommunities.delete(c.cid); item.classList.remove('dimmed'); } 
-    #     else { hiddenCommunities.add(c.cid); item.classList.add('dimmed'); }
-    #     applyIsolation(); 
-    #     updateSelectAllState();
-    #     });
-    #     item.innerHTML = `<div class="legend-dot" style="background:${c.color}"></div><span class="legend-label">${c.label}</span><span class="legend-count">${c.count}</span>`;
-    #     item.prepend(cb);
-    #     item.onclick = (e) => { if (e.target === cb) return; cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); };
-    #     legendEl.appendChild(item);
-    # });
-    # """
 
     html_foot = """
     </script>

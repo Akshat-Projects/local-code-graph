@@ -7,6 +7,9 @@ A fully private, local Graph-RAG (Retrieval-Augmented Generation) system designe
 * **100% Local Inference:** Powered by `llama.cpp` and Semantic Kernel, routing strictly to your local GPU (optimized for models like Gemma 4).
 * **Codebase Semantic Mapping:** Uses `networkx` to build a structural and semantic GraphML representation of your repository, understanding how files and classes interact.
 * **Dynamic Sub-Graph Retrieval:** Prevents memory bandwidth bottlenecks (KV Cache overflow) by extracting only the Top-K relevant nodes and their 1-hop neighbors before injecting them into the LLM context.
+* **Asynchronous & Highly Optimized:** Heavy AST parsing, Leiden community clustering, and graph querying are offloaded to background threads. The FastAPI event loop remains unblocked, providing extremely low-latency routing and ingestion orchestration.
+* **Parallel LLM Analysis:** During Phase 2 knowledge graph enrichment, multiple LLM requests are batched and executed concurrently (via semaphores and `asyncio.gather`), drastically reducing overall indexing time.
+* **Graph Caching Mechanism:** Prevents redundant XML parsing across queries by caching the parsed networkx graph in memory, reducing system overhead on subsequent questions.
 * **Streaming Streamlit UI:** A responsive chat interface that natively parses and renders fragmented JSON-Lines streams.
 * **Reasoning Tag Parser:** Includes a custom state-machine to perfectly intercept and render `<think>` tags from reasoning models into clean Markdown blockquotes.
 * **Real-Time Telemetry:** Tracks and displays generation stats (Tokens Per Second, Time Taken, Prompt vs. Generated Tokens) instantly in the UI.
@@ -15,8 +18,10 @@ A fully private, local Graph-RAG (Retrieval-Augmented Generation) system designe
 
 The system is decoupled into two primary services:
 
-1. **The Backend Engine (FastAPI):** - Handles asynchronous codebase ingestion and AST parsing.
-   - Manages the NetworkX graph database.
+1. **The Backend Engine (FastAPI):**
+   - Handles asynchronous codebase ingestion and sequential AST parsing via an optimized background worker (`asyncio.to_thread`).
+   - Executes parallel Phase 2 community clustering and LLM knowledge enrichment using async Semaphores.
+   - Manages the NetworkX graph database with centralized caching to prevent redundant I/O.
    - Executes dynamic Graph Retrieval and streams JSONL responses via Semantic Kernel.
 2. **The Command Center (Streamlit):**
    - Provides a unified dashboard for triggering background ingestion jobs with real-time progress polling.
