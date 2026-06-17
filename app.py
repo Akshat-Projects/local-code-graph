@@ -481,7 +481,7 @@ with tab_chat:
                 for event_type, chunk in stream_llm_response(
                     repo_name=st.session_state.active_repo,
                     question=current_prompt, 
-                    max_tokens=2048, 
+                    max_tokens=4096, 
                     target_path=st.session_state.target_path,
                     chat_history=formatted_history 
                 ):
@@ -612,11 +612,11 @@ with tab_map:
                         
                     # 3. Safely Parse Legend (Fixed to prevent string/int comparison crashes)
                     vis_legend = []
-                    # sorted_communities = sorted(community_counts.items(), key=lambda x: str(x[0]))
-                    sorted_communities = sorted(
-                        community_counts.items(), 
-                        key=lambda x: int(x[0]) if str(x[0]).isdigit() else str(x[0])
-                    )
+                    sorted_communities = sorted(community_counts.items(), key=lambda x: str(x[0]))
+                    # sorted_communities = sorted(
+                    #     community_counts.items(), 
+                    #     key=lambda x: int(x[0]) if str(x[0]).isdigit() else str(x[0])
+                    # )
                     
                     for cid, count in sorted_communities:
                         color_hex = extended_palette[len(vis_legend) % len(extended_palette)]

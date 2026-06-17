@@ -379,11 +379,35 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
             container2D.style.display = 'none';
             container3D.style.display = 'block';
             applyIsolation();
-            setTimeout(() => { if(Graph3D) Graph3D.zoomToFit(1000, 50); }, 100);
+            
+            // --- FIX: 2D to 3D Handoff ---
+            setTimeout(() => { 
+                if (Graph3D) {
+                    if (currentSelectedNode) {
+                        // If a node is selected, fly directly to it in 3D!
+                        focusNode(currentSelectedNode); 
+                    } else {
+                        // Otherwise, frame the whole graph
+                        Graph3D.zoomToFit(1000, 50); 
+                    }
+                } 
+            }, 100);
+            
         } else {
             container3D.style.display = 'none';
             container2D.style.display = 'block';
             applyIsolation(); 
+            
+            // --- FIX: 3D to 2D Handoff ---
+            setTimeout(() => {
+                if (currentSelectedNode) {
+                    // If a node is selected, frame it perfectly in 2D!
+                    focusNode(currentSelectedNode);
+                } else {
+                    // Otherwise, smoothly zoom out to the whole graph
+                    network.fit({ animation: { duration: 1000, easingFunction: 'easeInOutQuad' } });
+                }
+            }, 50);
         }
     });
 

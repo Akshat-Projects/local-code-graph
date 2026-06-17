@@ -31,93 +31,210 @@ class GraphQueryEngine:
         self._graph_cache = None
         self._graph_mtime = None
    
-    def _get_relevant_subgraph(self, G: nx.Graph, query: str, chat_history: str = "", top_k: int = 15) -> nx.Graph:
-        """
-        Retrieves a structurally and semantically dense subgraph using Personalized PageRank (PPR).
-        Uses semantic keyword overlap as a seed vector.
-        """
+    # def _get_relevant_subgraph(self, G: nx.Graph, query: str, chat_history: str = "", top_k: int = 15) -> nx.Graph:
+    #     """
+    #     Retrieves a structurally and semantically dense subgraph using Personalized PageRank (PPR).
+    #     Uses semantic keyword overlap as a seed vector.
+    #     """
         
-        # --- Context-Enriched Vector Search ---
+    #     # --- Context-Enriched Vector Search ---
+    #     search_query = query
+    #     if chat_history:
+    #         # Grab the last ~150 characters of history. This ensures words like "Hough circle" 
+    #         # from the previous turn are physically present in the FAISS/BM25 search!
+    #         context_anchor = chat_history[-150:].replace('\n', ' ')
+    #         search_query = f"{context_anchor} {query}"
+    #         logger.info(f"Enriched Vector Search Query: {search_query}")
+
+    #     # --- EXACT STRING MATCH BYPASS ---
+    #     # If the query looks like a specific code reference, check the raw node names first
+    #     exact_matches = [node for node in G.nodes() if query.lower() in str(node).lower()]
+    #     if exact_matches:
+    #         logger.info(f"Exact node name match found for '{query}'!")
+    #         subgraph_nodes = set(exact_matches)
+    #         for node in exact_matches:
+    #             if G.is_directed():
+    #                 subgraph_nodes.update(G.successors(node))
+    #                 subgraph_nodes.update(G.predecessors(node))
+    #             else:
+    #                 subgraph_nodes.update(G.neighbors(node))
+    #         return G.subgraph(subgraph_nodes)
+        
+    #     # 1. Hybrid Semantic + Keyword Search (Using the Enriched Query!)
+    #     top_semantic_nodes = self.vector_store.search(search_query, top_k=top_k)
+        
+    #     seed_nodes = {}
+    #     for rank, node_id in enumerate(top_semantic_nodes):
+    #         seed_nodes[node_id] = float(len(top_semantic_nodes) - rank)
+
+    #     # --- Context Window Safety (No Full Graph Fallback) ---
+    #     if not seed_nodes:
+    #         logger.info("No direct keyword matches found. Extracting central architectural hubs.")
+    #         hub_nodes = sorted(G.degree, key=lambda x: x[1], reverse=True)[:top_k]
+    #         subgraph_nodes = {node for node, _ in hub_nodes}
+            
+    #         for node in list(subgraph_nodes):
+    #             if G.is_directed():
+    #                 subgraph_nodes.update(G.successors(node))
+    #                 subgraph_nodes.update(G.predecessors(node))
+    #             else:
+    #                 subgraph_nodes.update(G.neighbors(node))
+    #         return G.subgraph(subgraph_nodes)
+
+    #     total_score = sum(seed_nodes.values())
+    #     personalization = {node: score / total_score for node, score in seed_nodes.items()}
+
+    #     # --- Multi-Graph to DiGraph Flattening ---
+    #     try:
+    #         if G.is_multigraph():
+    #             calc_graph = nx.DiGraph(G) if G.is_directed() else nx.Graph(G)
+    #         else:
+    #             calc_graph = G
+
+    #         pr_scores = nx.pagerank(calc_graph, alpha=0.85, personalization=personalization, max_iter=100)
+            
+    #         target_expansion_limit = top_k * 3
+    #         top_structural_nodes = sorted(pr_scores, key=pr_scores.get, reverse=True)[:target_expansion_limit]
+            
+    #         subgraph_nodes = set(top_structural_nodes)
+    #         logger.info(f"Successfully generated structural PPR subgraph with {len(subgraph_nodes)} nodes.")
+    #         return G.subgraph(subgraph_nodes)
+
+    #     except Exception as e:
+    #         logger.warning(f"PageRank computation failed or bypassed: {e}. Falling back to 1-hop neighborhood.")
+            
+    #         top_nodes = sorted(seed_nodes, key=seed_nodes.get, reverse=True)[:top_k]
+    #         subgraph_nodes = set(top_nodes)
+    #         for node in top_nodes:
+    #             try:
+    #                 if G.is_directed():
+    #                     subgraph_nodes.update(G.successors(node))
+    #                     subgraph_nodes.update(G.predecessors(node))
+    #                 else:
+    #                     subgraph_nodes.update(G.neighbors(node))
+    #             except AttributeError:
+    #                 subgraph_nodes.update(G.neighbors(node))
+                    
+    #         return G.subgraph(subgraph_nodes)
+       
+    # def _get_relevant_subgraph(self, G: nx.Graph, query: str, chat_history: str = "", top_k: int = 15) -> nx.Graph:
+    #     search_query = query
+    #     if chat_history:
+    #         context_anchor = chat_history[-150:].replace('\n', ' ')
+    #         search_query = f"{context_anchor} {query}"
+    #         logger.info(f"Enriched Vector Search Query: {search_query}")
+
+    #     exact_matches = [node for node in G.nodes() if query.lower() in str(node).lower()]
+    #     if exact_matches:
+    #         logger.info(f"Exact node name match found for '{query}'!")
+    #         subgraph_nodes = set(exact_matches)
+    #         scores = {n: 100.0 for n in exact_matches}
+    #         for node in exact_matches:
+    #             neighbors = (set(G.successors(node)) | set(G.predecessors(node))) if G.is_directed() else set(G.neighbors(node))
+    #             subgraph_nodes.update(neighbors)
+    #             for n in neighbors:
+    #                 scores.setdefault(n, 10.0)
+    #         return G.subgraph(subgraph_nodes), scores
+
+    #     top_semantic_nodes = self.vector_store.search(search_query, top_k=top_k)
+    #     seed_nodes = {}
+    #     for rank, node_id in enumerate(top_semantic_nodes):
+    #         seed_nodes[node_id] = float(len(top_semantic_nodes) - rank)
+
+    #     if not seed_nodes:
+    #         logger.info("No direct keyword matches found. Extracting central architectural hubs.")
+    #         hub_nodes = sorted(G.degree, key=lambda x: x[1], reverse=True)[:top_k]
+    #         subgraph_nodes = {node for node, _ in hub_nodes}
+    #         scores = {node: float(deg) for node, deg in hub_nodes}
+    #         for node in list(subgraph_nodes):
+    #             neighbors = (set(G.successors(node)) | set(G.predecessors(node))) if G.is_directed() else set(G.neighbors(node))
+    #             subgraph_nodes.update(neighbors)
+    #             for n in neighbors:
+    #                 scores.setdefault(n, 1.0)
+    #         return G.subgraph(subgraph_nodes), scores
+
+    #     total_score = sum(seed_nodes.values())
+    #     personalization = {node: score / total_score for node, score in seed_nodes.items()}
+
+    #     try:
+    #         calc_graph = nx.DiGraph(G) if G.is_directed() else nx.Graph(G) if G.is_multigraph() else G
+    #         pr_scores = nx.pagerank(calc_graph, alpha=0.85, personalization=personalization, max_iter=100)
+
+    #         target_expansion_limit = top_k * 3
+    #         top_structural_nodes = sorted(pr_scores, key=pr_scores.get, reverse=True)[:target_expansion_limit]
+    #         subgraph_nodes = set(top_structural_nodes)
+    #         logger.info(f"Successfully generated structural PPR subgraph with {len(subgraph_nodes)} nodes.")
+    #         scores = {n: pr_scores[n] for n in subgraph_nodes}
+    #         return G.subgraph(subgraph_nodes), scores
+
+    #     except Exception as e:
+    #         logger.warning(f"PageRank computation failed or bypassed: {e}. Falling back to 1-hop neighborhood.")
+    #         top_nodes = sorted(seed_nodes, key=seed_nodes.get, reverse=True)[:top_k]
+    #         subgraph_nodes = set(top_nodes)
+    #         scores = {n: seed_nodes[n] for n in top_nodes}
+    #         for node in top_nodes:
+    #             neighbors = (set(G.successors(node)) | set(G.predecessors(node))) if G.is_directed() else set(G.neighbors(node))
+    #             subgraph_nodes.update(neighbors)
+    #             for n in neighbors:
+    #                 scores.setdefault(n, 0.1)
+    #         return G.subgraph(subgraph_nodes), scores
+        
+        
+    def _get_relevant_subgraph(self, G: nx.Graph, query: str, chat_history: str = "", top_k: int = 15) -> tuple[nx.Graph, dict]:
         search_query = query
         if chat_history:
-            # Grab the last ~150 characters of history. This ensures words like "Hough circle" 
-            # from the previous turn are physically present in the FAISS/BM25 search!
             context_anchor = chat_history[-150:].replace('\n', ' ')
             search_query = f"{context_anchor} {query}"
             logger.info(f"Enriched Vector Search Query: {search_query}")
 
-        # --- EXACT STRING MATCH BYPASS ---
-        # If the query looks like a specific code reference, check the raw node names first
-        exact_matches = [node for node in G.nodes() if query.lower() in str(node).lower()]
-        if exact_matches:
-            logger.info(f"Exact node name match found for '{query}'!")
-            subgraph_nodes = set(exact_matches)
-            for node in exact_matches:
-                if G.is_directed():
-                    subgraph_nodes.update(G.successors(node))
-                    subgraph_nodes.update(G.predecessors(node))
-                else:
-                    subgraph_nodes.update(G.neighbors(node))
-            return G.subgraph(subgraph_nodes)
-        
-        # 1. Hybrid Semantic + Keyword Search (Using the Enriched Query!)
+        # 1. True Hybrid Search (RRF handles the exact-match heavy lifting now!)
         top_semantic_nodes = self.vector_store.search(search_query, top_k=top_k)
         
         seed_nodes = {}
         for rank, node_id in enumerate(top_semantic_nodes):
+            # The #1 result gets highest score, scaling down linearly
             seed_nodes[node_id] = float(len(top_semantic_nodes) - rank)
 
-        # --- Context Window Safety (No Full Graph Fallback) ---
         if not seed_nodes:
-            logger.info("No direct keyword matches found. Extracting central architectural hubs.")
+            logger.info("No direct matches found. Extracting central architectural hubs.")
             hub_nodes = sorted(G.degree, key=lambda x: x[1], reverse=True)[:top_k]
             subgraph_nodes = {node for node, _ in hub_nodes}
-            
+            scores = {node: float(deg) for node, deg in hub_nodes}
             for node in list(subgraph_nodes):
-                if G.is_directed():
-                    subgraph_nodes.update(G.successors(node))
-                    subgraph_nodes.update(G.predecessors(node))
-                else:
-                    subgraph_nodes.update(G.neighbors(node))
-            return G.subgraph(subgraph_nodes)
+                neighbors = (set(G.successors(node)) | set(G.predecessors(node))) if G.is_directed() else set(G.neighbors(node))
+                subgraph_nodes.update(neighbors)
+                for n in neighbors:
+                    scores.setdefault(n, 1.0)
+            return G.subgraph(subgraph_nodes), scores
 
         total_score = sum(seed_nodes.values())
         personalization = {node: score / total_score for node, score in seed_nodes.items()}
 
-        # --- Multi-Graph to DiGraph Flattening ---
         try:
-            if G.is_multigraph():
-                calc_graph = nx.DiGraph(G) if G.is_directed() else nx.Graph(G)
-            else:
-                calc_graph = G
-
+            calc_graph = nx.DiGraph(G) if G.is_directed() else nx.Graph(G) if G.is_multigraph() else G
             pr_scores = nx.pagerank(calc_graph, alpha=0.85, personalization=personalization, max_iter=100)
-            
+
             target_expansion_limit = top_k * 3
             top_structural_nodes = sorted(pr_scores, key=pr_scores.get, reverse=True)[:target_expansion_limit]
-            
             subgraph_nodes = set(top_structural_nodes)
+            scores = {n: pr_scores.get(n, 0) for n in subgraph_nodes}
+            
             logger.info(f"Successfully generated structural PPR subgraph with {len(subgraph_nodes)} nodes.")
-            return G.subgraph(subgraph_nodes)
+            return G.subgraph(subgraph_nodes), scores
 
         except Exception as e:
             logger.warning(f"PageRank computation failed or bypassed: {e}. Falling back to 1-hop neighborhood.")
-            
             top_nodes = sorted(seed_nodes, key=seed_nodes.get, reverse=True)[:top_k]
             subgraph_nodes = set(top_nodes)
+            scores = {n: seed_nodes.get(n, 0) for n in top_nodes}
             for node in top_nodes:
-                try:
-                    if G.is_directed():
-                        subgraph_nodes.update(G.successors(node))
-                        subgraph_nodes.update(G.predecessors(node))
-                    else:
-                        subgraph_nodes.update(G.neighbors(node))
-                except AttributeError:
-                    subgraph_nodes.update(G.neighbors(node))
-                    
-            return G.subgraph(subgraph_nodes)
-       
-
+                neighbors = (set(G.successors(node)) | set(G.predecessors(node))) if G.is_directed() else set(G.neighbors(node))
+                subgraph_nodes.update(neighbors)
+                for n in neighbors:
+                    scores.setdefault(n, 0.1)
+            return G.subgraph(subgraph_nodes), scores
+        
+        
     async def _load_graph(self):
         return await load_graph_cached(self.graph_path)
    
@@ -129,7 +246,8 @@ class GraphQueryEngine:
             logger.error(f"Failed to load graph database: {e}")
             raise FileNotFoundError("Graph database not found.")
 
-        filtered_G = self._get_relevant_subgraph(G=G, query=user_query, chat_history=chat_history)
+        # filtered_G = self._get_relevant_subgraph(G=G, query=user_query, chat_history=chat_history)
+        filtered_G, relevance_scores = self._get_relevant_subgraph(G=G, query=user_query, chat_history=chat_history)
 
         context_lines = ["# Codebase Semantic Map\n", "## Components & Logic"]
        
@@ -148,24 +266,45 @@ class GraphQueryEngine:
         file_scores = {}
         for node_id, node_data in filtered_G.nodes(data=True):
             file_path = node_data.get("file_path")
-            
             if not file_path:
                 node_str = str(node_id)
                 if node_str.startswith("file::"):
                     file_path = node_str.replace("file::", "")
                 elif "::" in node_str:
                     file_path = node_str.split("::")[0]
-            
             if not file_path:
                 continue
 
-            # Clean the path just in case
             file_path = str(file_path).strip()
+            relevance = relevance_scores.get(node_id, 0.0)
+            exact_bonus = 50 if user_query.lower() in str(node_id).lower() else 0
+            # file_scores[file_path] = file_scores.get(file_path, 0) + relevance + exact_bonus
+            node_score = relevance + exact_bonus
+        # file_scores = {}
+        # for node_id, node_data in filtered_G.nodes(data=True):
+            # file_path = node_data.get("file_path")
             
-            score_bump = 50 if user_query.lower() in str(node_id).lower() else 1
-            file_scores[file_path] = file_scores.get(file_path, 0) + score_bump
+            # if not file_path:
+            #     node_str = str(node_id)
+            #     if node_str.startswith("file::"):
+            #         file_path = node_str.replace("file::", "")
+            #     elif "::" in node_str:
+            #         file_path = node_str.split("::")[0]
+            
+            # if not file_path:
+            #     continue
 
-        top_files = sorted(file_scores, key=file_scores.get, reverse=True)[:5]
+            # # Clean the path just in case
+            # file_path = str(file_path).strip()
+            
+            # score_bump = 50 if user_query.lower() in str(node_id).lower() else 1
+            # file_scores[file_path] = file_scores.get(file_path, 0) + score_bump
+            
+            
+            # MAX, not SUM: a file earns its place by containing one critically
+            # relevant node, not by accumulating many loosely-relevant ones.
+            file_scores[file_path] = max(file_scores.get(file_path, 0), node_score)
+        top_files = sorted(file_scores, key=file_scores.get, reverse=True)[:8]
         
         # --- CRITICAL LOGGING ---
         logger.info(f"Attempting to inject raw code for files: {top_files}")
@@ -346,7 +485,15 @@ class GraphQueryEngine:
                     logger.warning(f"Could not parse telemetry from chunk: {e}")
 
         except Exception as e:
-            logger.error(f"Streaming inference failed: {e}", exc_info=True)
-
-            raise e
+            # 1. Get a clean, stringified version of the error without the massive traceback
+            error_str = str(e)
+            
+            # 2. Check if it's a connection-related death
+            if "Connection error" in error_str or "ConnectError" in error_str or "Failed to connect" in error_str:
+                logger.error("LLM Connection Refused: Ensure llama.cpp/Ollama/LM Studio is running and port is correct.")
+                yield "\n\n🚨 **Connection Lost:** Cannot reach the local LLM server. Please check if your inference engine is running."
+            else:
+                # 3. Handle context window overflows or other generation errors cleanly
+                logger.error(f"LLM Generation Error: {error_str}")
+                yield f"\n\n⚠️ **Inference Error:** The LLM encountered an issue. Make sure your context window isn't overflowing."
 

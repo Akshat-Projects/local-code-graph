@@ -42,6 +42,10 @@ class GraphAnalyst:
         # Check if the file node itself lacks an architectural summary
         file_node_id = f"file::{file_path}"
         file_node_data = self.librarian.graph.nodes.get(file_node_id, {})
+        
+        # if file_node_data.get("_is_pending") or file_node_data.get("analysis_status") != "complete":
+            # return True
+        
         f_summary = file_node_data.get("summary", "")
         if not f_summary or f_summary in ["No summary available.", "pending"]:
             return True
@@ -90,12 +94,16 @@ class GraphAnalyst:
 
         global_symbols = self.assembler.get_global_symbol_list()
         all_batches = self.assembler.build_module_batches()
+        logger.info(f"[DIAG] all_batches count: {len(all_batches)} | modified_files: {sorted(self.modified_files)[:10]}... (total {len(self.modified_files)})")
+
 
         batches = {
             file_node: batch
             for file_node, batch in all_batches.items()
             if self._needs_analysis(batch)
         }
+        logger.info(f"[DIAG] batches after _needs_analysis filter: {len(batches)}")
+
 
         if not batches:
             logger.info("No modules found to analyze. Graph is up to date.")
@@ -168,14 +176,14 @@ class GraphAnalyst:
                     arguments = KernelArguments(
                         target_nodes=json.dumps(
                             target_node_ids,
-                            indent=2,
-                            settings=OpenAIChatPromptExecutionSettings(max_tokens=8192)
+                            indent=2
                         ),
                         global_symbol_list=json.dumps(
                             global_symbols,
                             indent=2
                         ),
-                        raw_code=batch_data["raw_code"]
+                        raw_code=batch_data["raw_code"],
+                        settings=OpenAIChatPromptExecutionSettings(max_tokens=8192)
                     )
 
                     try:

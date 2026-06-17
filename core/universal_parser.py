@@ -124,35 +124,30 @@ class UniversalParser:
 
     def parse_file(self, absolute_path: str, relative_path: str, file_hash: str):
         ext = Path(absolute_path).suffix
-        file_node_id = self._register_file_node(relative_path, file_hash)
         file_ext = Path(absolute_path).suffix.lower()
         filename = Path(absolute_path).name.lower()
 
-        # --- Route config files to the Extractor ---
+        # --- Early exits: register file node HERE since clear_file_nodes is never called ---
         target_configs = [
-            "package.json", 
-            "requirements.txt", 
-            "docker-compose.yml", 
-            "docker-compose.yaml", 
-            "pyproject.toml"
+            "package.json", "requirements.txt",
+            "docker-compose.yml", "docker-compose.yaml", "pyproject.toml"
         ]
         if filename in target_configs:
+            file_node_id = self._register_file_node(relative_path, file_hash)
             self.config_extractor.extract(absolute_path, relative_path, file_node_id)
-            return # We are done, no Tree-sitter needed for these!
-        
-        # Fallback for unsupported files: just track them as a file node
+            return
+
         if ext not in LANGUAGE_CONFIG:
             self._register_file_node(relative_path, file_hash)
             return
 
         lang_type = LANGUAGE_CONFIG[ext]["type"]
         parser = self.parsers[ext]
-        
+
         try:
             with open(absolute_path, "r", encoding="utf-8") as f:
                 source_code = f.read()
-                
-            # --- Added the Jupyter Notebook Interceptor ---
+
             if ext == ".ipynb":
                 notebook = json.loads(source_code)
                 virtual_code = []
@@ -166,21 +161,44 @@ class UniversalParser:
                 source_bytes = "\n\n".join(virtual_code).encode("utf8")
             else:
                 source_bytes = source_code.encode("utf8")
-                
+
             tree = parser.parse(source_bytes)
         except Exception as e:
             logger.error(f"Failed to parse AST for {relative_path}: {e}")
             return
 
+        # FIX: clear OLD nodes first, THEN register the fresh file node.
+        # Old order was reversed: _register_file_node ran first, then
+        # clear_file_nodes deleted it (file node has file_path=relative_path),
+        # then add_edge in _register_class/_register_function silently
+        # re-created it with zero attributes — invisible to build_module_batches.
         self.clear_file_nodes(relative_path)
+        file_node_id = self._register_file_node(relative_path, file_hash)  # ← MOVED HERE
 
-        # HTML doesn't need structural parsing, just the file node
         if lang_type == "html":
             return
 
-        # Execute the query to find structural blocks
         language_obj = LANGUAGE_CONFIG[ext]["lang"]
         query = language_obj.query(QUERIES[lang_type])
+
+
+        # logger.warning(
+        #     f"BEFORE_CLEAR {relative_path} "
+        #     f"nodes={self.graph.number_of_nodes()}"
+        # )
+        # self.clear_file_nodes(relative_path)
+        # logger.warning(
+        #     f"AFTER_CLEAR {relative_path} "
+        #     f"nodes={self.graph.number_of_nodes()}"
+        # )
+
+        # # HTML doesn't need structural parsing, just the file node
+        # if lang_type == "html":
+        #     return
+
+        # # Execute the query to find structural blocks
+        # language_obj = LANGUAGE_CONFIG[ext]["lang"]
+        # query = language_obj.query(QUERIES[lang_type])
         
         # --- Version-Safe Capture Extraction (Tree-sitter 0.22+ compatibility) ---
         captures = []

@@ -29,6 +29,11 @@ class ContextAssembler:
         batches = {}
         file_nodes = [n for n, d in self.graph.nodes(data=True) if d.get("type") == "file"]
         
+        logger.info(f"[DIAG] Total nodes in graph: {self.graph.number_of_nodes()} | File-type nodes found: {len(file_nodes)}")
+        if file_nodes:
+            logger.info(f"[DIAG] Sample file node: {file_nodes[0]} -> {self.graph.nodes[file_nodes[0]]}")
+        logger.info(f"[DIAG] target_repo_path = {self.target_repo_path}")
+        
         for file_node in file_nodes:
             file_path = self.graph.nodes[file_node]["file_path"]
             absolute_path = os.path.join(self.target_repo_path, file_path)
@@ -44,7 +49,7 @@ class ContextAssembler:
                 with open(absolute_path, "r", encoding="utf-8") as f:
                     raw_code = f.read()
             except Exception as e:
-                logger.warning(f"Warning: Could not read {absolute_path}: {e}")
+                logger.warning(f"[DIAG] Warning: Could not read {absolute_path}: {e}")
                 continue
                 
             # --- NEW: Spaghetti Detection ---
@@ -63,48 +68,3 @@ class ContextAssembler:
             }
             
         return batches
-    # def build_module_batches(self) -> Dict[str, Dict[str, Any]]:
-    #     """
-    #     Groups nodes by file and extracts the raw source code.
-    #     Instead of sending 1 function at a time, we send the whole file module
-    #     to maximize Gemma 4's 128k context window.
-    #     """
-    #     batches = {}
-        
-    #     # 1. Find all file nodes in the graph
-    #     file_nodes = [
-    #         n for n, d in self.graph.nodes(data=True) 
-    #         if d.get("type") == "file"
-    #     ]
-        
-    #     for file_node in file_nodes:
-    #         file_path = self.graph.nodes[file_node]["file_path"]
-    #         absolute_path = os.path.join(self.target_repo_path, file_path)
-            
-    #         # 2. Find all functions, classes, and class methods contained in this file
-    #         # NetworkX successors of a file node are its classes and module-level functions
-    #         internal_nodes = list(self.graph.successors(file_node))
-            
-    #         # Also retrieve class methods (successors of class nodes)
-    #         method_nodes = []
-    #         for node in internal_nodes:
-    #             if self.graph.nodes[node].get("type") == "class":
-    #                 method_nodes.extend(self.graph.successors(node))
-    #         internal_nodes.extend(method_nodes)
-            
-    #         # 3. Read the raw source code
-    #         try:
-    #             with open(absolute_path, "r", encoding="utf-8") as f:
-    #                 raw_code = f.read()
-    #         except Exception as e:
-    #             logger.warning(f"Warning: Could not read {absolute_path}: {e}")
-    #             continue
-                
-    #         batches[file_node] = {
-    #             "file_path": file_path,
-    #             "raw_code": raw_code,
-    #             "contained_nodes": internal_nodes
-    #         }
-            
-    #     return batches
-    
