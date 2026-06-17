@@ -1,9 +1,10 @@
 import re
-import asyncio
+import json
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pathlib import Path
 import networkx as nx
+from fastapi.responses import StreamingResponse
 
 from core.librarian import Librarian
 from models.query_llm import QueryRequest, NodeChatRequest
@@ -12,43 +13,125 @@ from intelligence_layer.query_engine import GraphQueryEngine
 from intelligence_layer.kernel_client import LocalKernelFactory
 from utils.logger import get_logger
 from utils.global_cache import load_graph_cached
+from agents.graph import agent_app
+
 
 logger = get_logger()
 router = APIRouter(prefix="/api/v1/query", tags=["Querying"])
 
+
 @router.post("")
 async def ask_codebase(request: QueryRequest):
     """
-    Submits a natural language question and streams the answer back.
+    Submits a natural language question and streams the LangGraph agent answers back.
     """
     logger.info(f"Received streaming query for repo: {request.repo_name}")
     logger.info(f"Received Chat History Length: {len(request.chat_history)} characters") 
     
-    target_dir = validate_ingestion_path(
-            request.target_path
-        )
+    # Validate the directory path
+    target_dir = validate_ingestion_path(request.target_path)
+    
+    # 1. Initialize the starting values on our state whiteboard
+    initial_state = {
+        "repo_name": request.repo_name,
+        "target_repo_path": str(target_dir),
+        "user_query": request.question,
+        "chat_history": request.chat_history,
+        "intent": "",
+        "structural_context": [],
+        "temporal_context": [],
+        "final_response": ""
+    }
+
+    # 2. Define an async generator to stream tokens out of LangGraph live
+    async def langgraph_streamer():
+        seen_nodes = set()  # 🛡️ FIX 1: Tracker to prevent duplicate UI spam
+        
+        try:
+            # 📝 OPEN A DEBUG FILE
+            with open("debug_chunks.log", "w", encoding="utf-8") as debug_file:
+                debug_file.write("--- NEW GENERATION RUN ---\n")
+                async for event in agent_app.astream_events(initial_state, version="v2"):
+                    kind = event.get("event")
+                    node_name = event.get("metadata", {}).get("langgraph_node", "")
+
+                    # 🌟 1. Broadcast Status (Strictly ONCE per node)
+                    if kind == "on_chain_start" and node_name and node_name not in seen_nodes:
+                        seen_nodes.add(node_name)
+                        
+                        if node_name == "router":
+                            yield json.dumps({"type": "status", "content": "Supervisor Agent routing query..."}) + "\n"
+                        elif node_name == "graph_agent":
+                            yield json.dumps({"type": "status", "content": "Architect Agent querying structure..."}) + "\n"
+                        elif node_name == "synthesizer":
+                            yield json.dumps({"type": "status", "content": "Writer Agent drafting response..."}) + "\n"
+                        elif node_name == "conversational":
+                            yield json.dumps({"type": "status", "content": "Chat Agent processing small talk..."}) + "\n"
+
+                    # 🌟 2. Broadcast Text AND Hidden Reasoning Thoughts
+                    elif kind == "on_chat_model_stream":
+                        if node_name in ["synthesizer", "conversational"]:
+                            chunk = event["data"].get("chunk")
+                            if chunk:
+                                # 🧠 FIX 2: Dig out the hidden llama.cpp/DeepSeek reasoning
+                                debug_file.write(f"{chunk.dict()}\n")
+                                debug_file.flush()
+                                reasoning = chunk.additional_kwargs.get("reasoning_content")
+                                if reasoning:
+                                    yield json.dumps({"type": "thought", "content": reasoning}) + "\n"
+                                
+                                # 📝 Standard markdown text
+                                if chunk.content:
+                                    yield json.dumps({"type": "chunk", "content": chunk.content}) + "\n"
+                
+                                    
+        except Exception as e:
+            logger.error(f"LangGraph Streaming Error: {e}")
+            # Ensure errors are safely JSON formatted so they don't crash app.py
+            yield json.dumps({"type": "error", "content": f"Generation failed midway: {str(e)}"}) + "\n"
+
     try:
-        engine = GraphQueryEngine(
-            # target_repo_path=request.target_path,
-            repo_name=request.repo_name,
-            target_repo_path=str(target_dir),
-            )
-        
-        # Grab the async generator
-        response_generator = engine.answer_question_stream(
-            user_query=request.question, 
-            max_tokens=request.max_tokens,
-            chat_history=request.chat_history
-            )
-        
-        # Stream the chunks down the HTTP connection as plain text
-        return StreamingResponse(response_generator, media_type="text/plain")
+        # 3. Stream the chunks down the HTTP connection seamlessly!
+        return StreamingResponse(langgraph_streamer(), media_type="text/plain")
         
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to process query: {e}")
-        raise HTTPException(status_code=500, detail="Internal inference error.")
+        raise HTTPException(status_code=500, detail="Internal agent execution error.")
+# @router.post("")
+# async def ask_codebase(request: QueryRequest):
+#     """
+#     Submits a natural language question and streams the answer back.
+#     """
+#     logger.info(f"Received streaming query for repo: {request.repo_name}")
+#     logger.info(f"Received Chat History Length: {len(request.chat_history)} characters") 
+    
+#     target_dir = validate_ingestion_path(
+#             request.target_path
+#         )
+#     try:
+#         engine = GraphQueryEngine(
+#             # target_repo_path=request.target_path,
+#             repo_name=request.repo_name,
+#             target_repo_path=str(target_dir),
+#             )
+        
+#         # Grab the async generator
+#         response_generator = engine.answer_question_stream(
+#             user_query=request.question, 
+#             max_tokens=request.max_tokens,
+#             chat_history=request.chat_history
+#             )
+        
+#         # Stream the chunks down the HTTP connection as plain text
+#         return StreamingResponse(response_generator, media_type="text/plain")
+        
+#     except FileNotFoundError as e:
+#         raise HTTPException(status_code=404, detail=str(e))
+#     except Exception as e:
+#         logger.error(f"Failed to process query: {e}")
+#         raise HTTPException(status_code=500, detail="Internal inference error.")
     
     
 @router.post("/node/{repo_name}")

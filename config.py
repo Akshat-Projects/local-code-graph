@@ -7,7 +7,7 @@ class Settings(BaseSettings):
 
     REPO_NAME: str
     TARGET_REPO_PATH: str
-    LOCAL_ENDPOINT: str
+    MODEL_ENDPOINT: str
     OPENAI_API_KEY: str  # Since we are using openai module, we need a dummy key here
     AI_MODEL_ID: str
     APP_NAME: str
