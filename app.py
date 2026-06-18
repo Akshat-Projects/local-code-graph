@@ -204,6 +204,9 @@ def stream_llm_response(repo_name: str, question: str, max_tokens: int, target_p
                 if data["type"] == "chunk":
                     yield "text", data["content"]
                     
+                elif data["type"] == "status":
+                    yield "status", data["content"]
+                    
                 elif data["type"] == "thought":
                     yield "thought", data["content"]
                     
@@ -485,13 +488,23 @@ with tab_chat:
                     target_path=st.session_state.target_path,
                     chat_history=formatted_history 
                 ):
-                    if event_type == "thought":
+                    if event_type == "status":
+                        is_thinking = True
+                        # Dynamically change the spinner text to the current agent!
+                        thought_container.update(label=f"⚙️ {chunk}", expanded=True)
+                        
+                        # We also append it to the thought log so the user can review the steps later
+                        st.session_state.temp_thought += f"- **{chunk}**\n\n"
+                        thought_placeholder.markdown(st.session_state.temp_thought)
+                        
+                    elif event_type == "thought":
                         is_thinking = True
                         st.session_state.temp_thought += chunk
                         thought_placeholder.markdown(st.session_state.temp_thought)
                         
                     elif event_type == "text":
                         if is_thinking:
+                            # When the text finally starts flowing, lock the status box
                             thought_container.update(
                                 label="💭 Thought process complete", state="complete", expanded=False
                             )
@@ -612,7 +625,7 @@ with tab_map:
                         
                     # 3. Safely Parse Legend (Fixed to prevent string/int comparison crashes)
                     vis_legend = []
-                    sorted_communities = sorted(community_counts.items(), key=lambda x: str(x[0]))
+                    sorted_communities = sorted(community_counts.items(), key= lambda x: int(x[0].split(" ")[-1]))
                     # sorted_communities = sorted(
                     #     community_counts.items(), 
                     #     key=lambda x: int(x[0]) if str(x[0]).isdigit() else str(x[0])

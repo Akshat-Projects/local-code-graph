@@ -23,7 +23,7 @@ class LocalKernelFactory:
         
         # Configure the connector to point to llama-server
         # llama-server runs on port 8080 by default and mimics the OpenAI v1 API
-        local_endpoint = settings.LOCAL_ENDPOINT
+        model_endpoint = settings.MODEL_ENDPOINT
         
         # llama-server doesn't require a real API key, but the OpenAI SDK 
         # requires the variable to be populated with something.
@@ -33,23 +33,18 @@ class LocalKernelFactory:
         # We use the generic OpenAIChatCompletion but rewrite its destination
         client = AsyncOpenAI(
             api_key=settings.OPENAI_API_KEY,
-            base_url=settings.LOCAL_ENDPOINT,
+            base_url=settings.MODEL_ENDPOINT,
         )
 
         chat_service = OpenAIChatCompletion(
             ai_model_id=settings.AI_MODEL_ID,
             async_client=client,
         )
-        # chat_service = OpenAIChatCompletion(
-        #     ai_model_id=settings.AI_MODEL_ID, # The name doesn't strictly matter for llama-server, but good for logs
-        #     api_key=dummy_api_key,
-        #     base_url=local_endpoint
-        # )
         
         # Register the local service with Semantic Kernel as the default text generator
         kernel.add_service(chat_service)
         
-        logger.info(f"Semantic Kernel initialized. Routing to local engine at {local_endpoint}")
+        logger.info(f"Semantic Kernel initialized. Routing to local engine at {model_endpoint}")
         return kernel
     
     
