@@ -18,5 +18,8 @@ class GraphRAGState(TypedDict):
     structural_context: Annotated[List[str], operator.add]
     temporal_context: Annotated[List[str], operator.add]
     
+    telemetry: dict | None
+    elapsed_seconds: float
+    
     # The final markdown output to stream to the UI
     final_response: str

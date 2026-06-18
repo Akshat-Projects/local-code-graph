@@ -1,18 +1,68 @@
+from typing import Any, Mapping
+from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from agents.state import GraphRAGState
+import langchain_openai.chat_models.base as langchain_openai_base
 
 # from agents.tools import search_architecture_graph
 from intelligence_layer.query_engine import GraphQueryEngine
+from utils.helper import timeit
 from config import settings
+from utils.logger import get_logger
+
+logger = get_logger()
+
+# 1. Patch _convert_delta_to_message_chunk
+if hasattr(langchain_openai_base, "_convert_delta_to_message_chunk"):
+    original_convert = langchain_openai_base._convert_delta_to_message_chunk
+    
+    def patched_convert(_dict, default_class):
+        logger.info(f"[DIAG] patched _convert_delta_to_message_chunk fired. keys={list(_dict.keys()) if hasattr(_dict, 'keys') else type(_dict)}")
+        chunk = original_convert(_dict, default_class)
+        
+        reasoning = None
+        if hasattr(_dict, "get"):
+            reasoning = _dict.get("reasoning_content")
+        else:
+            reasoning = getattr(_dict, "reasoning_content", None)
+            
+        logger.info(f"[DIAG] reasoning_content found: {reasoning is not None}")
+        if reasoning:
+            chunk.additional_kwargs["reasoning_content"] = reasoning
+        return chunk
+        
+    langchain_openai_base._convert_delta_to_message_chunk = patched_convert
+    logger.info("Successfully monkeypatched langchain_openai._convert_delta_to_message_chunk")
+else:
+    logger.warning("Could not find _convert_delta_to_message_chunk in langchain_openai.chat_models.base")
+
+# 2. Patch _convert_dict_to_message
+if hasattr(langchain_openai_base, "_convert_dict_to_message"):
+    original_convert_dict = langchain_openai_base._convert_dict_to_message
+    
+    def patched_convert_dict(_dict):
+        logger.info(f"[DIAG] patched _convert_dict_to_message fired. keys={list(_dict.keys()) if hasattr(_dict, 'keys') else type(_dict)}")
+        message = original_convert_dict(_dict)
+        reasoning = _dict.get("reasoning_content")
+        if reasoning:
+            message.additional_kwargs["reasoning_content"] = reasoning
+        return message
+        
+    langchain_openai_base._convert_dict_to_message = patched_convert_dict
+    logger.info("Successfully monkeypatched langchain_openai._convert_dict_to_message")
+else:
+    logger.warning("Could not find _convert_dict_to_message in langchain_openai.chat_models.base")
 
 # 1. Initialize your local LLM connection
 # LangChain treats local llama.cpp / LM Studio servers exactly like OpenAI
 llm = ChatOpenAI(
     base_url=settings.MODEL_ENDPOINT, 
-    api_key="not-needed-for-local", 
+    api_key=settings.OPENAI_API_KEY, 
     temperature=0, # Router needs to be highly deterministic
+    stream_usage=True
 )
+
 
 async def router_node(state: GraphRAGState):
     """
@@ -27,7 +77,7 @@ async def router_node(state: GraphRAGState):
 
     1. 'CONVERSATIONAL': Choose this ONLY if the user is greeting you, making small talk, or asking meta-questions about the chat history itself.
     2. 'CODEBASE': Choose this for anything else. 
-    **CRITICAL OVERRIDE:** If the user asks an explanatory question like "How does X work?", "Why do we use Y?", you MUST route to CODEBASE.
+    **CRITICAL OVERRIDE:** If the user asks an explanatory question like "How does X work?", "Why do we use Y?", "Why this doesn't work?", you MUST route to CODEBASE.
 
     Respond with EXACTLY one word, either 'CONVERSATIONAL' or 'CODEBASE'. Do not include punctuation or markdown.
     """
@@ -79,6 +129,7 @@ async def graph_agent_node(state: GraphRAGState):
     return {"structural_context": [context]}
 
 
+@timeit(attach_as="elapsed_seconds")
 async def synthesizer_node(state: GraphRAGState):
     """
     The Writer: Reads the whiteboard context and drafts the final markdown answer.
@@ -114,9 +165,21 @@ async def synthesizer_node(state: GraphRAGState):
         "question": user_query
     })
     
+    telemetry = None
+    usage = getattr(response, "usage_metadata", None)
+    if usage:
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        telemetry = {
+            "prompt_n": input_tokens,
+            "predicted_n": output_tokens,
+            "total_tokens": usage.get("total_tokens", input_tokens + output_tokens),
+        }
+    
     # Write the final answer to the whiteboard
-    return {"final_response": response.content}
+    return {"final_response": response.content, "telemetry": telemetry}
 
+@timeit(attach_as="elaspsed_seconds")
 async def conversational_node(state: GraphRAGState):
     """Handles pure small talk, bypassing the codebase completely."""
     user_query = state["user_query"]

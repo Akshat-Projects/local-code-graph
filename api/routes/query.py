@@ -83,7 +83,38 @@ async def ask_codebase(request: QueryRequest):
                                 # 📝 Standard markdown text
                                 if chunk.content:
                                     yield json.dumps({"type": "chunk", "content": chunk.content}) + "\n"
-                
+                                    
+                    elif kind == "on_chain_end" and node_name == "router":
+                        output = event.get("data", {}).get("output", {})
+                        intent = output.get("intent") if isinstance(output, dict) else None
+                        if intent:
+                            yield json.dumps({
+                                "type": "thought",
+                                "content": f"\n\n**Routing decision:** `{intent}`\n\n"
+                            }) + "\n"
+
+                    elif kind == "on_chain_end" and node_name == "graph_agent":
+                        output = event.get("data", {}).get("output", {})
+                        ctx_list = output.get("structural_context", []) if isinstance(output, dict) else []
+                        if ctx_list:
+                            preview = ctx_list[0][:400]
+                            yield json.dumps({
+                                "type": "thought",
+                                "content": f"\n\n**Retrieved context (preview):**\n```\n{preview}...\n```\n\n"
+                            }) + "\n"
+                            
+                    elif kind == "on_chain_end" and node_name in ["synthesizer", "conversational"]:
+                        output = event.get("data", {}).get("output", {})
+                        telemetry = output.get("telemetry") if isinstance(output, dict) else None
+                        elapsed = output.get("elapsed_seconds") if isinstance(output, dict) else None
+                        if telemetry and elapsed:
+                            predicted_n = telemetry.get("predicted_n", 0)
+                            payload = {
+                                **telemetry,
+                                "time_taken": round(elapsed, 2),
+                                "tps": round(predicted_n / elapsed, 2) if elapsed > 0 else 0,
+                            }
+                            yield json.dumps({"type": "telemetry", **payload}) + "\n"
                                     
         except Exception as e:
             logger.error(f"LangGraph Streaming Error: {e}")

@@ -625,7 +625,7 @@ with tab_map:
                         
                     # 3. Safely Parse Legend (Fixed to prevent string/int comparison crashes)
                     vis_legend = []
-                    sorted_communities = sorted(community_counts.items(), key=lambda x: str(x[0]))
+                    sorted_communities = sorted(community_counts.items(), key= lambda x: int(x[0].split(" ")[-1]))
                     # sorted_communities = sorted(
                     #     community_counts.items(), 
                     #     key=lambda x: int(x[0]) if str(x[0]).isdigit() else str(x[0])
