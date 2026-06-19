@@ -55,10 +55,10 @@ class Librarian:
                 return nx.read_graphml(self.graph_path, node_type=str)
             except Exception as e:
                 logger.warning(f"Warning: Failed to read existing graph layout ({e}). Initializing fresh.")
-        return nx.MultiDiGraph()
 
-    def save_graph(self):
+    def save_graph(self, G: nx.MultiDiGraph = None):
         """Saves the graph using an atomic write to prevent UI read-crashes."""
+        graph_obj = G if G is not None else self.graph
         try:
             dir_name = os.path.dirname(self.graph_path)
             os.makedirs(dir_name, exist_ok=True)
@@ -66,13 +66,13 @@ class Librarian:
             # 1. Write to a temporary file first
             fd, temp_path = tempfile.mkstemp(dir=dir_name, prefix=".tmp_", suffix=".graphml")
             with os.fdopen(fd, 'wb') as f:
-                nx.write_graphml(self.graph, f)
+                nx.write_graphml(graph_obj, f)
                 
             # 2. Atomic rename (Instantly replaces the old file, zero chance of read corruption)
             os.replace(temp_path, self.graph_path)
             
         except Exception as e:
-            self.logger.error(f"Failed to save graph atomically: {e}")
+            logger.error(f"Failed to save graph atomically: {e}")
 
     @staticmethod
     def calculate_file_hash(absolute_path: str) -> str:

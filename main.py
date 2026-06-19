@@ -1,6 +1,9 @@
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+import multiprocessing.resource_tracker as _rt
+import traceback as _tb
+from tqdm.std import TqdmDefaultWriteLock as _TqdmLock
 
 from config import settings
 from api.middleware import setup_middlewares
@@ -9,7 +12,21 @@ from utils.logger import get_logger, hook_uvicorn_logging
 
 from api.routes import health, ingest, query
 
+
 logger = get_logger()
+
+
+_TqdmLock()
+
+_orig_register = _rt.register
+
+# Tracing root cause of leaked Semaphore items
+def _traced_register(name, rtype):
+    logger.info(f"\n[SEM-TRACK] register rtype={rtype} name={name}")
+    _tb.print_stack(limit=12)
+    return _orig_register(name, rtype)
+
+_rt.register = _traced_register
 
 # Define the lifespan context manager
 @asynccontextmanager

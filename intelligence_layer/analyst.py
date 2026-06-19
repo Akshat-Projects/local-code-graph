@@ -236,7 +236,8 @@ class GraphAnalyst:
 
                         # Persist successful module safely in helper thread behind the lock
                         async with self.save_lock:
-                            await asyncio.to_thread(self.librarian.save_graph)
+                            graph_copy = self.librarian.graph.copy()
+                            await asyncio.to_thread(self.librarian.save_graph, graph_copy)
 
                     except ValidationError as e:
                         logger.error(
@@ -251,7 +252,8 @@ class GraphAnalyst:
                                 ] = "failed_validation"
 
                         async with self.save_lock:
-                            await asyncio.to_thread(self.librarian.save_graph)
+                            graph_copy = self.librarian.graph.copy()
+                            await asyncio.to_thread(self.librarian.save_graph, graph_copy)
 
                     except Exception as e:
                         logger.error(
@@ -266,12 +268,14 @@ class GraphAnalyst:
                                 ] = "failed_runtime"
 
                         async with self.save_lock:
-                            await asyncio.to_thread(self.librarian.save_graph)
+                            graph_copy = self.librarian.graph.copy()
+                            await asyncio.to_thread(self.librarian.save_graph, graph_copy)
                         raise
                 else:
                     # If file has no contained functions/classes, save file summary status
                     async with self.save_lock:
-                        await asyncio.to_thread(self.librarian.save_graph)
+                        graph_copy = self.librarian.graph.copy()
+                        await asyncio.to_thread(self.librarian.save_graph, graph_copy)
                 
                 # Progress update callback
                 async with progress_lock:
@@ -295,6 +299,7 @@ class GraphAnalyst:
 
         logger.info("--- Final Graph Flush ---")
         async with self.save_lock:
-            await asyncio.to_thread(self.librarian.save_graph)
+            graph_copy = self.librarian.graph.copy()
+            await asyncio.to_thread(self.librarian.save_graph, graph_copy)
 
         logger.info("Phase 2 Complete!")

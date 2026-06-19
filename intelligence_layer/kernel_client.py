@@ -10,6 +10,8 @@ from utils.logger import get_logger
 
 logger = get_logger()
 
+_SHARED_KERNEL = None
+
 class LocalKernelFactory:
     """
     Initializes a Semantic Kernel instance configured to route all 
@@ -18,6 +20,10 @@ class LocalKernelFactory:
     
     @staticmethod
     def create_kernel() -> Kernel:
+        global _SHARED_KERNEL
+        if _SHARED_KERNEL is not None:
+            return _SHARED_KERNEL
+            
         # Initialize the core kernel
         kernel = Kernel()
         
@@ -25,12 +31,7 @@ class LocalKernelFactory:
         # llama-server runs on port 8080 by default and mimics the OpenAI v1 API
         model_endpoint = settings.MODEL_ENDPOINT
         
-        # llama-server doesn't require a real API key, but the OpenAI SDK 
-        # requires the variable to be populated with something.
-        # dummy_api_key = settings.OPENAI_API_KEY
-        
         # Define the AI Service
-        # We use the generic OpenAIChatCompletion but rewrite its destination
         client = AsyncOpenAI(
             api_key=settings.OPENAI_API_KEY,
             base_url=settings.MODEL_ENDPOINT,
@@ -45,9 +46,8 @@ class LocalKernelFactory:
         kernel.add_service(chat_service)
         
         logger.info(f"Semantic Kernel initialized. Routing to local engine at {model_endpoint}")
-        return kernel
-    
-    
+        _SHARED_KERNEL = kernel
+        return _SHARED_KERNEL
 
 
 class CodebaseSearchPlugin:
@@ -67,6 +67,7 @@ class CodebaseSearchPlugin:
         logger.info(f"[AGENT] LLM autonomously called search_codebase for: '{query}'")
         # Call your existing powerhouse function!
         return await self.engine._build_context_payload(user_query=query, chat_history="")
+
 
 # Quick test execution
 if __name__ == "__main__":

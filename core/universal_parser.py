@@ -77,6 +77,32 @@ LANGUAGE_CONFIG = {
 }
 
 # 3. Define S-Expression Queries per Language
+CALL_QUERIES = {
+    # High confidence — stable, widely tested grammars
+    "python": "(call function: (attribute attribute: (identifier) @call_name))",
+    "javascript": "(call_expression function: (member_expression property: (property_identifier) @call_name))",
+    "typescript": "(call_expression function: (member_expression property: (property_identifier) @call_name))",
+    "tsx": "(call_expression function: (member_expression property: (property_identifier) @call_name))",
+    "java": "(method_invocation name: (identifier) @call_name)",
+    "go": "(call_expression function: (selector_expression field: (field_identifier) @call_name))",
+    "c_sharp": "(invocation_expression function: (member_access_expression name: (identifier) @call_name))",
+
+    # Medium confidence — validate with a test file before production use
+    "rust": "(call_expression function: (field_expression field: (field_identifier) @call_name))",
+    "cpp": "(call_expression function: (field_expression field: (field_identifier) @call_name))",
+    "php": "(member_call_expression name: (name) @call_name)",
+    "ruby": "(call method: (identifier) @call_name)",
+    "swift": "(call_expression function: (explicit_member_expression name: (simple_identifier) @call_name))",
+    "kotlin": "(call_expression callee: (navigation_expression (simple_identifier) @call_name))",
+
+    # C has no method calls — capture plain function calls instead
+    "c": "(call_expression function: (identifier) @call_name)",
+
+    # No meaningful call semantics to capture
+    "html": "",
+    "css":  "",
+    "sql":  "",
+}
 QUERIES = {
     "python": "(class_definition name: (identifier) @class) (function_definition name: (identifier) @function)",
     "javascript": "(class_declaration name: (identifier) @class) (function_declaration name: (identifier) @function) (lexical_declaration (variable_declarator name: (identifier) @function value: (arrow_function))) (method_definition name: (property_identifier) @function)",
@@ -180,25 +206,6 @@ class UniversalParser:
 
         language_obj = LANGUAGE_CONFIG[ext]["lang"]
         query = language_obj.query(QUERIES[lang_type])
-
-
-        # logger.warning(
-        #     f"BEFORE_CLEAR {relative_path} "
-        #     f"nodes={self.graph.number_of_nodes()}"
-        # )
-        # self.clear_file_nodes(relative_path)
-        # logger.warning(
-        #     f"AFTER_CLEAR {relative_path} "
-        #     f"nodes={self.graph.number_of_nodes()}"
-        # )
-
-        # # HTML doesn't need structural parsing, just the file node
-        # if lang_type == "html":
-        #     return
-
-        # # Execute the query to find structural blocks
-        # language_obj = LANGUAGE_CONFIG[ext]["lang"]
-        # query = language_obj.query(QUERIES[lang_type])
         
         # --- Version-Safe Capture Extraction (Tree-sitter 0.22+ compatibility) ---
         captures = []
@@ -236,29 +243,135 @@ class UniversalParser:
         # Extract matches
         classes = {}
         
+        registered_ranges = {}  # node_id -> (start_byte, end_byte) of full body
+
         for node, capture_name in captures:
-            # Safely get the name using bytes
             node_name = source_bytes[node.start_byte:node.end_byte].decode('utf8')
-            start_line = node.start_point[0] + 1
-            end_line = node.end_point[0] + 1
+            body_node = node.parent  # full definition node, not just the name
+            start_line = body_node.start_point[0] + 1  # FIXED
+            end_line   = body_node.end_point[0] + 1    # FIXED
 
             if capture_name == "class":
                 class_id = f"{relative_path}::{node_name}"
                 self._register_class(class_id, node_name, relative_path, file_node_id, start_line, end_line)
-                classes[node_name] = {"id": class_id, "ts_node": node.parent} 
-                
+                classes[node_name] = {"id": class_id, "ts_node": body_node}
+                registered_ranges[class_id] = (body_node.start_byte, body_node.end_byte)
+
             elif capture_name == "function":
-                # Determine if this function is inside a class we already found
                 parent_class_id = None
                 for cls_name, cls_data in classes.items():
-                    # If the function's AST node is a child of the class's AST node, it's a method!
                     if self._is_descendant(node, cls_data["ts_node"]):
                         parent_class_id = cls_data["id"]
                         break
-                
                 func_id = f"{parent_class_id}::{node_name}" if parent_class_id else f"{relative_path}::{node_name}"
                 self._register_function(func_id, node_name, relative_path, file_node_id, parent_class_id, start_line, end_line)
+                registered_ranges[func_id] = (body_node.start_byte, body_node.end_byte)
+                
+        # After the main capture loop, before returning
+        call_query_str = CALL_QUERIES.get(lang_type, "")
+        if call_query_str:
+            try:
+                call_query = language_obj.query(call_query_str)
 
+                # Version-safe extraction — identical pattern to your existing code
+                call_captures = []
+                if hasattr(call_query, "captures"):
+                    raw = call_query.captures(tree.root_node)
+                    for item in raw:
+                        call_captures.append((item[0], item[1]))
+                else:
+                    from tree_sitter import QueryCursor
+                    cursor = QueryCursor(call_query)
+                    raw = cursor.captures(tree.root_node)
+                    if isinstance(raw, dict):
+                        for name, nodes in raw.items():
+                            for n in nodes:
+                                call_captures.append((n, name))
+                    elif isinstance(raw, list):
+                        for item in raw:
+                            if hasattr(item[0], "start_byte"):
+                                call_captures.append((item[0], item[1]))
+                            else:
+                                call_captures.append((item[1], item[0]))
+
+                api_calls_by_scope: dict[str, set] = {}
+                for call_node, _ in call_captures:
+                    call_name = source_bytes[
+                        call_node.start_byte:call_node.end_byte
+                    ].decode("utf8").strip()
+                    if not call_name or len(call_name) > 80:
+                        continue
+                    enclosing = self._find_enclosing_scope(call_node, registered_ranges)
+                    scope_id  = enclosing if enclosing else file_node_id
+                    api_calls_by_scope.setdefault(scope_id, set()).add(call_name)
+
+                for scope_node_id, calls in api_calls_by_scope.items():
+                    if scope_node_id in self.graph:
+                        existing = self.graph.nodes[scope_node_id].get("api_calls", "")
+                        prior    = set(existing.split(",")) if existing else set()
+                        merged   = prior | calls
+                        self.graph.nodes[scope_node_id]["api_calls"] = ",".join(
+                            sorted(merged)
+                        )
+
+            except Exception as e:
+                # A bad query string for one language must never break parsing
+                logger.warning(
+                    f"Call capture failed for {relative_path} "
+                    f"(lang={lang_type}): {e}"
+                )
+        
+        # for node, capture_name in captures:
+        #     # Safely get the name using bytes
+        #     node_name = source_bytes[node.start_byte:node.end_byte].decode('utf8')
+        #     start_line = node.start_point[0] + 1
+        #     end_line = node.end_point[0] + 1
+
+        #     if capture_name == "class":
+        #         class_id = f"{relative_path}::{node_name}"
+        #         self._register_class(class_id, node_name, relative_path, file_node_id, start_line, end_line)
+        #         classes[node_name] = {"id": class_id, "ts_node": node.parent} 
+                
+        #     elif capture_name == "function":
+        #         # Determine if this function is inside a class we already found
+        #         parent_class_id = None
+        #         for cls_name, cls_data in classes.items():
+        #             # If the function's AST node is a child of the class's AST node, it's a method!
+        #             if self._is_descendant(node, cls_data["ts_node"]):
+        #                 parent_class_id = cls_data["id"]
+        #                 break
+                
+        #         func_id = f"{parent_class_id}::{node_name}" if parent_class_id else f"{relative_path}::{node_name}"
+        #         self._register_function(func_id, node_name, relative_path, file_node_id, parent_class_id, start_line, end_line)
+
+    
+    def _find_enclosing_scope(
+        self,
+        node,
+        registered_ranges: dict
+    ) -> str | None:
+        """
+        Returns the node_id of the smallest registered scope
+        (class or function) whose byte range contains this node.
+        Falls back to None, which callers treat as file scope.
+        Language-agnostic: uses byte offsets from Tree-sitter.
+        """
+        call_start = node.start_byte
+        call_end   = node.end_byte
+
+        best_id   = None
+        best_size = float('inf')
+
+        for node_id, (scope_start, scope_end) in registered_ranges.items():
+            if scope_start <= call_start and call_end <= scope_end:
+                size = scope_end - scope_start
+                if size < best_size:
+                    best_size = size
+                    best_id   = node_id
+
+        return best_id
+    
+    
     # ─────────────────────────────────────────────
     # Tree-sitter Helper
     # ─────────────────────────────────────────────
