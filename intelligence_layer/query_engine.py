@@ -1,5 +1,8 @@
 import os
 import asyncio
+import re
+import shutil
+import subprocess
 import json
 import networkx as nx
 from semantic_kernel.functions import KernelArguments
@@ -9,11 +12,12 @@ from semantic_kernel.connectors.ai.open_ai import OpenAIChatPromptExecutionSetti
 
 from config import settings
 from utils.logger import get_logger
-from utils.helper import timeit, validate_ingestion_path
+from utils.helper import timeit, validate_ingestion_path, secure_path_join
 from intelligence_layer.kernel_client import LocalKernelFactory
 from core.vector_operations import HybridVectorStore
 from intelligence_layer.kernel_client import CodebaseSearchPlugin
 from utils.global_cache import load_graph_cached
+from utils.helper import get_ignore_spec
 from intelligence_layer.prompts import GRAPH_RAG_PROMPT, AGENT_PROMPT
 
 logger = get_logger()
@@ -31,154 +35,106 @@ class GraphQueryEngine:
         self._graph_cache = None
         self._graph_mtime = None
    
-    # def _get_relevant_subgraph(self, G: nx.Graph, query: str, chat_history: str = "", top_k: int = 15) -> nx.Graph:
-    #     """
-    #     Retrieves a structurally and semantically dense subgraph using Personalized PageRank (PPR).
-    #     Uses semantic keyword overlap as a seed vector.
-    #     """
-        
-    #     # --- Context-Enriched Vector Search ---
-    #     search_query = query
-    #     if chat_history:
-    #         # Grab the last ~150 characters of history. This ensures words like "Hough circle" 
-    #         # from the previous turn are physically present in the FAISS/BM25 search!
-    #         context_anchor = chat_history[-150:].replace('\n', ' ')
-    #         search_query = f"{context_anchor} {query}"
-    #         logger.info(f"Enriched Vector Search Query: {search_query}")
+   
+    def _exact_match_search(
+        self,
+        query: str,
+        target_dir: Path,
+        ignore_spec,
+    ) -> dict:
+        """
+        Extracts code-like tokens from the natural language query and
+        searches for them literally across the workspace.
+        Returns {relative_path: [line_numbers]}.
+        Respects the same ignore spec as ingestion — no new filtering logic.
+        Language-agnostic: operates on raw file bytes regardless of language.
+        """
+        # Common English stop words to filter out from natural language queries
+        stopwords = {
+            "why", "is", "my", "chatbot", "not", "find", "any", "mentions", "of", 
+            "despite", "me", "adding", "regex", "search", "in", "whole", "code", 
+            "base", "can", "you", "see", "where", "the", "does", "do", "how", "what", 
+            "which", "who", "whom", "this", "that", "these", "those", "am", "are", 
+            "was", "were", "be", "been", "being", "have", "has", "had", "having", 
+            "a", "an", "and", "but", "if", "or", "because", "as", "until", "while", 
+            "at", "by", "for", "with", "about", "against", "between", "into", "through", 
+            "during", "before", "after", "above", "below", "to", "from", "up", "down", 
+            "on", "off", "over", "under", "again", "further", "then", "once", "here", 
+            "there", "when", "all", "both", "each", "few", "more", "most", "other", 
+            "some", "such", "no", "nor", "only", "own", "same", "so", "than", "too", 
+            "very", "will", "just", "should", "now", "us", "use", "used", "using"
+        }
 
-    #     # --- EXACT STRING MATCH BYPASS ---
-    #     # If the query looks like a specific code reference, check the raw node names first
-    #     exact_matches = [node for node in G.nodes() if query.lower() in str(node).lower()]
-    #     if exact_matches:
-    #         logger.info(f"Exact node name match found for '{query}'!")
-    #         subgraph_nodes = set(exact_matches)
-    #         for node in exact_matches:
-    #             if G.is_directed():
-    #                 subgraph_nodes.update(G.successors(node))
-    #                 subgraph_nodes.update(G.predecessors(node))
-    #             else:
-    #                 subgraph_nodes.update(G.neighbors(node))
-    #         return G.subgraph(subgraph_nodes)
-        
-    #     # 1. Hybrid Semantic + Keyword Search (Using the Enriched Query!)
-    #     top_semantic_nodes = self.vector_store.search(search_query, top_k=top_k)
-        
-    #     seed_nodes = {}
-    #     for rank, node_id in enumerate(top_semantic_nodes):
-    #         seed_nodes[node_id] = float(len(top_semantic_nodes) - rank)
+        # 1. First, extract code-specific patterns (CamelCase, snake_case, dotted names)
+        code_tokens = re.findall(
+            r'\b[A-Z][a-z]+(?:[A-Z][a-z0-9]+)+\b'     # CamelCase
+            r'|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b'      # snake_case
+            r'|\b[a-zA-Z_]\w+\.[a-zA-Z_]\w+\b',         # dotted
+            query
+        )
 
-    #     # --- Context Window Safety (No Full Graph Fallback) ---
-    #     if not seed_nodes:
-    #         logger.info("No direct keyword matches found. Extracting central architectural hubs.")
-    #         hub_nodes = sorted(G.degree, key=lambda x: x[1], reverse=True)[:top_k]
-    #         subgraph_nodes = {node for node, _ in hub_nodes}
-            
-    #         for node in list(subgraph_nodes):
-    #             if G.is_directed():
-    #                 subgraph_nodes.update(G.successors(node))
-    #                 subgraph_nodes.update(G.predecessors(node))
-    #             else:
-    #                 subgraph_nodes.update(G.neighbors(node))
-    #         return G.subgraph(subgraph_nodes)
+        # 2. As a fallback, extract any alphanumeric word that isn't a stopword or too short
+        all_words = re.findall(r'\b[a-zA-Z_]\w*\b', query)
+        fallback_tokens = [w for w in all_words if w.lower() not in stopwords and len(w) > 2]
 
-    #     total_score = sum(seed_nodes.values())
-    #     personalization = {node: score / total_score for node, score in seed_nodes.items()}
+        tokens = list(set(code_tokens + fallback_tokens))
 
-    #     # --- Multi-Graph to DiGraph Flattening ---
-    #     try:
-    #         if G.is_multigraph():
-    #             calc_graph = nx.DiGraph(G) if G.is_directed() else nx.Graph(G)
-    #         else:
-    #             calc_graph = G
+        if not tokens:
+            return {}
 
-    #         pr_scores = nx.pagerank(calc_graph, alpha=0.85, personalization=personalization, max_iter=100)
-            
-    #         target_expansion_limit = top_k * 3
-    #         top_structural_nodes = sorted(pr_scores, key=pr_scores.get, reverse=True)[:target_expansion_limit]
-            
-    #         subgraph_nodes = set(top_structural_nodes)
-    #         logger.info(f"Successfully generated structural PPR subgraph with {len(subgraph_nodes)} nodes.")
-    #         return G.subgraph(subgraph_nodes)
+        has_rg  = shutil.which("rg") is not None
+        results = {}
 
-    #     except Exception as e:
-    #         logger.warning(f"PageRank computation failed or bypassed: {e}. Falling back to 1-hop neighborhood.")
-            
-    #         top_nodes = sorted(seed_nodes, key=seed_nodes.get, reverse=True)[:top_k]
-    #         subgraph_nodes = set(top_nodes)
-    #         for node in top_nodes:
-    #             try:
-    #                 if G.is_directed():
-    #                     subgraph_nodes.update(G.successors(node))
-    #                     subgraph_nodes.update(G.predecessors(node))
-    #                 else:
-    #                     subgraph_nodes.update(G.neighbors(node))
-    #             except AttributeError:
-    #                 subgraph_nodes.update(G.neighbors(node))
-                    
-    #         return G.subgraph(subgraph_nodes)
-       
-    # def _get_relevant_subgraph(self, G: nx.Graph, query: str, chat_history: str = "", top_k: int = 15) -> nx.Graph:
-    #     search_query = query
-    #     if chat_history:
-    #         context_anchor = chat_history[-150:].replace('\n', ' ')
-    #         search_query = f"{context_anchor} {query}"
-    #         logger.info(f"Enriched Vector Search Query: {search_query}")
+        for token in tokens:
+            matched_lines = []
 
-    #     exact_matches = [node for node in G.nodes() if query.lower() in str(node).lower()]
-    #     if exact_matches:
-    #         logger.info(f"Exact node name match found for '{query}'!")
-    #         subgraph_nodes = set(exact_matches)
-    #         scores = {n: 100.0 for n in exact_matches}
-    #         for node in exact_matches:
-    #             neighbors = (set(G.successors(node)) | set(G.predecessors(node))) if G.is_directed() else set(G.neighbors(node))
-    #             subgraph_nodes.update(neighbors)
-    #             for n in neighbors:
-    #                 scores.setdefault(n, 10.0)
-    #         return G.subgraph(subgraph_nodes), scores
+            if has_rg:
+                try:
+                    # Run ripgrep case-insensitively (-i) and literally (-F)
+                    out = subprocess.check_output(
+                        ["rg", "-in", "--no-heading", "-F", token, str(target_dir)],
+                        text=True,
+                        timeout=5,
+                        stderr=subprocess.DEVNULL
+                    )
+                    matched_lines = out.strip().splitlines()
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                    matched_lines = []
+            else:
+                # Pure-Python fallback — case-insensitive match
+                token_lower = token.lower()
+                for file_path in target_dir.rglob("*"):
+                    if not file_path.is_file():
+                        continue
+                    try:
+                        rel = str(file_path.relative_to(target_dir))
+                    except ValueError:
+                        continue
+                    if ignore_spec.match_file(rel):
+                        continue
+                    try:
+                        content = file_path.read_text(encoding="utf-8", errors="ignore")
+                        for i, line in enumerate(content.splitlines(), 1):
+                            if token_lower in line.lower():
+                                matched_lines.append(f"{file_path}:{i}:{line}")
+                    except Exception:
+                        continue
 
-    #     top_semantic_nodes = self.vector_store.search(search_query, top_k=top_k)
-    #     seed_nodes = {}
-    #     for rank, node_id in enumerate(top_semantic_nodes):
-    #         seed_nodes[node_id] = float(len(top_semantic_nodes) - rank)
+            for raw in matched_lines:
+                parts = raw.split(":", 2)
+                if len(parts) < 2:
+                    continue
+                try:
+                    abs_path = Path(parts[0])
+                    line_no  = int(parts[1])
+                    rel_path = str(abs_path.relative_to(target_dir))
+                except (ValueError, Exception):
+                    continue
+                if ignore_spec.match_file(rel_path):
+                    continue
+                results.setdefault(rel_path, []).append(line_no)
 
-    #     if not seed_nodes:
-    #         logger.info("No direct keyword matches found. Extracting central architectural hubs.")
-    #         hub_nodes = sorted(G.degree, key=lambda x: x[1], reverse=True)[:top_k]
-    #         subgraph_nodes = {node for node, _ in hub_nodes}
-    #         scores = {node: float(deg) for node, deg in hub_nodes}
-    #         for node in list(subgraph_nodes):
-    #             neighbors = (set(G.successors(node)) | set(G.predecessors(node))) if G.is_directed() else set(G.neighbors(node))
-    #             subgraph_nodes.update(neighbors)
-    #             for n in neighbors:
-    #                 scores.setdefault(n, 1.0)
-    #         return G.subgraph(subgraph_nodes), scores
-
-    #     total_score = sum(seed_nodes.values())
-    #     personalization = {node: score / total_score for node, score in seed_nodes.items()}
-
-    #     try:
-    #         calc_graph = nx.DiGraph(G) if G.is_directed() else nx.Graph(G) if G.is_multigraph() else G
-    #         pr_scores = nx.pagerank(calc_graph, alpha=0.85, personalization=personalization, max_iter=100)
-
-    #         target_expansion_limit = top_k * 3
-    #         top_structural_nodes = sorted(pr_scores, key=pr_scores.get, reverse=True)[:target_expansion_limit]
-    #         subgraph_nodes = set(top_structural_nodes)
-    #         logger.info(f"Successfully generated structural PPR subgraph with {len(subgraph_nodes)} nodes.")
-    #         scores = {n: pr_scores[n] for n in subgraph_nodes}
-    #         return G.subgraph(subgraph_nodes), scores
-
-    #     except Exception as e:
-    #         logger.warning(f"PageRank computation failed or bypassed: {e}. Falling back to 1-hop neighborhood.")
-    #         top_nodes = sorted(seed_nodes, key=seed_nodes.get, reverse=True)[:top_k]
-    #         subgraph_nodes = set(top_nodes)
-    #         scores = {n: seed_nodes[n] for n in top_nodes}
-    #         for node in top_nodes:
-    #             neighbors = (set(G.successors(node)) | set(G.predecessors(node))) if G.is_directed() else set(G.neighbors(node))
-    #             subgraph_nodes.update(neighbors)
-    #             for n in neighbors:
-    #                 scores.setdefault(n, 0.1)
-    #         return G.subgraph(subgraph_nodes), scores
-        
+        return results
         
     def _get_relevant_subgraph(self, G: nx.Graph, query: str, chat_history: str = "", top_k: int = 15) -> tuple[nx.Graph, dict]:
         search_query = query
@@ -238,8 +194,11 @@ class GraphQueryEngine:
     async def _load_graph(self):
         return await load_graph_cached(self.graph_path)
    
+   
     @timeit
     async def _build_context_payload(self, user_query: str, chat_history: str = "") -> str:
+        target_dir = Path(self.target_repo_path)
+        
         try:
             G = await self._load_graph()
         except Exception as e:
@@ -278,48 +237,32 @@ class GraphQueryEngine:
             file_path = str(file_path).strip()
             relevance = relevance_scores.get(node_id, 0.0)
             exact_bonus = 50 if user_query.lower() in str(node_id).lower() else 0
-            # file_scores[file_path] = file_scores.get(file_path, 0) + relevance + exact_bonus
             node_score = relevance + exact_bonus
-        # file_scores = {}
-        # for node_id, node_data in filtered_G.nodes(data=True):
-            # file_path = node_data.get("file_path")
-            
-            # if not file_path:
-            #     node_str = str(node_id)
-            #     if node_str.startswith("file::"):
-            #         file_path = node_str.replace("file::", "")
-            #     elif "::" in node_str:
-            #         file_path = node_str.split("::")[0]
-            
-            # if not file_path:
-            #     continue
-
-            # # Clean the path just in case
-            # file_path = str(file_path).strip()
-            
-            # score_bump = 50 if user_query.lower() in str(node_id).lower() else 1
-            # file_scores[file_path] = file_scores.get(file_path, 0) + score_bump
-            
-            
-            # MAX, not SUM: a file earns its place by containing one critically
-            # relevant node, not by accumulating many loosely-relevant ones.
             file_scores[file_path] = max(file_scores.get(file_path, 0), node_score)
-        top_files = sorted(file_scores, key=file_scores.get, reverse=True)[:8]
+            
+        ignore_spec = get_ignore_spec(target_dir)
+        grep_hits = self._exact_match_search(user_query, target_dir, ignore_spec)
+        for rel_path in grep_hits:
+            file_scores[rel_path] = file_scores.get(rel_path, 0) + 80
+
+        # top_files = sorted(file_scores, key=file_scores.get, reverse=True)[:8]
+        top_files = sorted(file_scores, key=file_scores.get, reverse=True)[:5]
         
         # --- CRITICAL LOGGING ---
         logger.info(f"Attempting to inject raw code for files: {top_files}")
+        for rel_path in top_files:
+            try:
+                full_path = secure_path_join(self.target_repo_path, rel_path)
+            except Exception as e:
+                logger.error(f"Path verification failed for {rel_path}: {e}")
+                continue
 
-        target_dir = Path(self.target_repo_path)
-
-        for rel_path in top_files: 
-            # Safely strip leading slashes so pathlib doesn't resolve to the root drive
-            safe_rel_path = rel_path.lstrip("\\/")
-            full_path = target_dir / safe_rel_path
-            
             if full_path.exists() and full_path.is_file():
                 try:
                     code_content = await asyncio.to_thread(full_path.read_text, encoding="utf-8")
-                    context_lines.append(f"\n### File: {rel_path}\n```python\n{code_content}\n```")
+                    # context_lines.append(f"\n### File: {rel_path}\n```python\n{code_content}\n```")
+                    ext = Path(rel_path).suffix.lstrip(".")  # "py", "js", "java", etc.
+                    context_lines.append(f"\n### File: {rel_path}\n```{ext}\n{code_content}\n```")
                     logger.info(f"SUCCESS: Injected physical file: {full_path}")
                 except Exception as e:
                     logger.error(f"FAIL: Could not read source file {full_path}: {e}")
@@ -327,7 +270,7 @@ class GraphQueryEngine:
                 logger.error(f"FAIL: File not found on disk at absolute path: {full_path}")
 
         return "\n".join(context_lines)
-
+    
 
     async def _route_query(self, user_query: str, chat_history: str) -> str:
         """

@@ -148,3 +148,23 @@ def validate_ingestion_path(path_str: str) -> Path:
             continue
 
     return target_dir
+
+def secure_path_join(base_path: str | Path, relative_path: str) -> Path:
+    """
+    Securely joins a base path and a relative path, resolving any symlinks/traversal
+    and ensuring the resolved target path is strictly within the base path.
+    """
+    base_dir = Path(base_path).resolve()
+    
+    # Strip leading slashes to prevent absolute path resolution
+    safe_rel_path = relative_path.lstrip("\\/")
+    
+    target_path = (base_dir / safe_rel_path).resolve()
+    
+    # Ensure target is relative to base
+    if not target_path.is_relative_to(base_dir):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Path traversal attempt detected"
+        )
+    return target_path

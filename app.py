@@ -2,6 +2,7 @@ import streamlit.components.v1 as components
 import json
 import requests
 import streamlit as st
+import threading
 from config import settings
 from streamlit_autorefresh import st_autorefresh
 from streamlit_agraph import agraph, Node, Edge, Config
@@ -51,6 +52,14 @@ if "temp_thought" not in st.session_state:
     st.session_state.temp_thought = ""
 if "temp_content" not in st.session_state:
     st.session_state.temp_content = ""
+if "generation_chunks" not in st.session_state:
+    st.session_state.generation_chunks = []
+if "generation_status" not in st.session_state:
+    st.session_state.generation_status = {"status": "idle"}
+
+# Top level autorefresh when background thread is active and user is viewing the chat
+if st.session_state.is_generating and st.session_state.get("view_mode", "💬 AI Assistant") == "💬 AI Assistant":
+    st_autorefresh(interval=500, key="chat_generation_refresh")
 
 # ==========================================
 # SIDEBAR: CONTROL ROOM & TELEMETRY
@@ -162,6 +171,7 @@ with st.sidebar:
     if st.button("🗑️ Clear Chat History", use_container_width=True):
         st.session_state.messages = []
         st.session_state.latest_telemetry = None
+        st.session_state.is_generating = False
         st.rerun()
 
     # Re-render existing telemetry if it exists in state
@@ -176,12 +186,18 @@ with st.sidebar:
 st.title("🧠 LocalGraph RAG Terminal")
 st.caption(f"Currently querying isolated graph database: **{st.session_state.active_repo}**")
 
-# Create two main tabs
-tab_chat, tab_map = st.tabs(["💬 AI Assistant", "🕸️ Interactive Architecture Map"])
+# Create navigation menu at the top
+st.radio(
+    "Navigation",
+    ["💬 AI Assistant", "🕸️ Interactive Architecture Map"],
+    horizontal=True,
+    label_visibility="collapsed",
+    key="view_mode"
+)
 
-# --- Helper: Advanced Streaming Generator ---
-def stream_llm_response(repo_name: str, question: str, max_tokens: int, target_path: str, chat_history: str):
-    """Streams text, telemetry, and natively parsed reasoning API fields."""
+# --- Helper: Threaded Query Runner ---
+def background_query_runner(repo_name, question, max_tokens, target_path, chat_history, chunks_list, status_holder):
+    status_holder["status"] = "running"
     payload = {
         "repo_name": repo_name, 
         "question": question, 
@@ -190,32 +206,38 @@ def stream_llm_response(repo_name: str, question: str, max_tokens: int, target_p
         "chat_history": chat_history
     }
     try:
-        with requests.post(f"{API_BASE}/query", json=payload, stream=True) as response:
+        with requests.post(f"{API_BASE}/query", json=payload, stream=True, timeout=60) as response:
             if response.status_code != 200:
-                yield "error", f"Error: Backend returned {response.status_code}"
+                chunks_list.append(("error", f"Error: Backend returned {response.status_code}"))
+                status_holder["status"] = "error"
                 return
             
             for line in response.iter_lines():
                 if not line:
                     continue
                 
-                data = json.loads(line.decode('utf-8'))
-                
-                if data["type"] == "chunk":
-                    yield "text", data["content"]
+                if status_holder.get("stop_requested", False):
+                    status_holder["status"] = "stopped"
+                    return
                     
-                elif data["type"] == "status":
-                    yield "status", data["content"]
+                try:
+                    data = json.loads(line.decode('utf-8'))
                     
-                elif data["type"] == "thought":
-                    yield "thought", data["content"]
+                    if data["type"] == "chunk":
+                        chunks_list.append(("text", data["content"]))
+                    elif data["type"] == "status":
+                        chunks_list.append(("status", data["content"]))
+                    elif data["type"] == "thought":
+                        chunks_list.append(("thought", data["content"]))
+                    elif data["type"] == "telemetry":
+                        chunks_list.append(("telemetry", data))
+                except Exception:
+                    pass
                     
-                elif data["type"] == "telemetry":
-                    st.session_state.latest_telemetry = data
-                    render_telemetry_ui(data)
-                    
+            status_holder["status"] = "completed"
     except Exception as e:
-        yield "error", f"Connection error: {str(e)}"
+        chunks_list.append(("error", f"Connection error: {str(e)}"))
+        status_holder["status"] = "error"
 
 # ─────────────────────────────────────────────────────────
 # Graph assembly — runs on every rerun using session state
@@ -401,25 +423,64 @@ def render_graph_health_banner(repo_name: str, layout_context: str = "visualizer
 
 def stop_generation():
     """Callback triggered instantly when 'Stop' is clicked."""
-    # Save whatever partial text was generated into the official history
+    if "generation_status" in st.session_state:
+        st.session_state.generation_status["stop_requested"] = True
+    
+    temp_thought = ""
+    temp_content = ""
+    for event_type, chunk in list(st.session_state.generation_chunks):
+        if event_type == "status":
+            temp_thought += f"- **{chunk}**\n\n"
+        elif event_type == "thought":
+            temp_thought += chunk
+        elif event_type == "text":
+            temp_content += chunk
+            
     st.session_state.messages.append({
         "role": "assistant",
-        "thought": st.session_state.temp_thought,
-        "content": st.session_state.temp_content + "\n\n*(🛑 Stopped by User)*"
+        "thought": temp_thought,
+        "content": temp_content + "\n\n*(🛑 Stopped by User)*"
     })
-    # Clear temps
-    st.session_state.temp_thought = ""
-    st.session_state.temp_content = ""
+    
+    st.session_state.generation_chunks = []
+    st.session_state.generation_status = {"status": "idle"}
+    st.session_state.is_generating = False
 
 # ==========================================
 # TAB 1: CHAT INTERFACE & RENDER LOOP
 # ==========================================
 
-with tab_chat:
+if st.session_state.view_mode == "💬 AI Assistant":
     # 1. Handle prefill / Edit Button logic first
     if st.session_state.get("prefill_prompt"):
-        st.session_state.messages.append({"role": "user", "content": st.session_state.prefill_prompt})
+        prompt = st.session_state.prefill_prompt
+        st.session_state.messages.append({"role": "user", "content": prompt})
         st.session_state.prefill_prompt = None
+        
+        # Format history
+        history_msgs = st.session_state.messages[:-1] 
+        formatted_history = "\n".join([f"[{msg['role'].upper()}]: {msg['content']}" for msg in history_msgs])
+        
+        # Initialize background state
+        st.session_state.generation_chunks = []
+        st.session_state.generation_status = {"status": "pending", "stop_requested": False}
+        st.session_state.is_generating = True
+        
+        # Start background thread
+        t = threading.Thread(
+            target=background_query_runner,
+            args=(
+                st.session_state.active_repo,
+                prompt,
+                4096,
+                st.session_state.target_path,
+                formatted_history,
+                st.session_state.generation_chunks,
+                st.session_state.generation_status
+            ),
+            daemon=True
+        )
+        t.start()
         st.rerun()
 
     if st.session_state.get("interruption_message"):
@@ -455,90 +516,116 @@ with tab_chat:
                         st.markdown(msg["thought"])
                 st.markdown(msg["content"])
 
-    # 3. Generation Logic (Triggered ONLY if the last message in history is from the user)
-    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+    # 3. Generation Logic (Triggered ONLY if the last message in history is from the user and generation state is active)
+    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user" and st.session_state.is_generating:
         
         with st.chat_message("assistant"):
             top_col1, top_col2 = st.columns([0.85, 0.15])
             
+            # Reset temp states for this specific generation run
+            temp_thought = ""
+            temp_content = ""
+            is_thinking = False
+            last_status = "Thinking..."
+
+            current_chunks = list(st.session_state.generation_chunks)
+            for event_type, chunk in current_chunks:
+                if event_type == "status":
+                    is_thinking = True
+                    last_status = chunk
+                    temp_thought += f"- **{chunk}**\n\n"
+                    
+                elif event_type == "thought":
+                    is_thinking = True
+                    temp_thought += chunk
+                    
+                elif event_type == "text":
+                    if is_thinking:
+                        is_thinking = False
+                    temp_content += chunk
+                    
+                elif event_type == "telemetry":
+                    st.session_state.latest_telemetry = chunk
+                
+                elif event_type == "error":
+                    st.error(chunk)
+
+            # Render thought container using native st.status context to prevent layout shifts
             with top_col1:
-                thought_container = st.status("💭 Thinking...", expanded=True)
-                thought_placeholder = thought_container.empty()
-            
+                if temp_thought:
+                    if is_thinking:
+                        with st.status(f"⚙️ {last_status}", state="running", expanded=True):
+                            st.markdown(temp_thought)
+                    else:
+                        with st.status("💭 Thought process complete", state="complete", expanded=False):
+                            st.markdown(temp_thought)
+                else:
+                    st.status("💭 Thinking...", state="running", expanded=True)
+
             with top_col2:
                 # The on_click callback saves the partial text BEFORE Streamlit reruns
                 st.button("🛑 Stop", key="stop_btn", on_click=stop_generation)
 
-            answer_container = st.empty()
-            is_thinking = False
-            
-            # Reset temp states for this specific generation run
-            st.session_state.temp_thought = ""
-            st.session_state.temp_content = ""
+            # Render standard markdown directly without st.empty() to allow React VDOM in-place updates
+            if temp_content:
+                st.markdown(temp_content)
+                
+            if st.session_state.latest_telemetry:
+                render_telemetry_ui(st.session_state.latest_telemetry)
 
-            current_prompt = st.session_state.messages[-1]["content"]
-            history_msgs = st.session_state.messages[:-1] 
-            formatted_history = "\n".join([f"[{msg['role'].upper()}]: {msg['content']}" for msg in history_msgs])
-
-            try:
-                for event_type, chunk in stream_llm_response(
-                    repo_name=st.session_state.active_repo,
-                    question=current_prompt, 
-                    max_tokens=4096, 
-                    target_path=st.session_state.target_path,
-                    chat_history=formatted_history 
-                ):
-                    if event_type == "status":
-                        is_thinking = True
-                        # Dynamically change the spinner text to the current agent!
-                        thought_container.update(label=f"⚙️ {chunk}", expanded=True)
-                        
-                        # We also append it to the thought log so the user can review the steps later
-                        st.session_state.temp_thought += f"- **{chunk}**\n\n"
-                        thought_placeholder.markdown(st.session_state.temp_thought)
-                        
-                    elif event_type == "thought":
-                        is_thinking = True
-                        st.session_state.temp_thought += chunk
-                        thought_placeholder.markdown(st.session_state.temp_thought)
-                        
-                    elif event_type == "text":
-                        if is_thinking:
-                            # When the text finally starts flowing, lock the status box
-                            thought_container.update(
-                                label="💭 Thought process complete", state="complete", expanded=False
-                            )
-                            is_thinking = False
-                        st.session_state.temp_content += chunk
-                        answer_container.markdown(st.session_state.temp_content)
-                        
-                    elif event_type == "error":
-                        st.error(chunk)
-
-                # If the loop finishes naturally without the user clicking stop
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "thought": st.session_state.temp_thought,
-                    "content": st.session_state.temp_content
-                })
-                st.session_state.temp_thought = ""
-                st.session_state.temp_content = ""
-                st.rerun() # Refresh UI one last time to remove the Stop button
-
-            except Exception as e:
-                # Catch sudden connection drops
-                pass
+            # Check if background thread has finished
+            bg_status = st.session_state.generation_status.get("status", "idle")
+            if bg_status in ["completed", "error", "stopped"]:
+                st.session_state.is_generating = False
+                
+                # Append completed message to history
+                if bg_status == "completed":
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "thought": temp_thought,
+                        "content": temp_content
+                    })
+                
+                # Clear background variables
+                st.session_state.generation_chunks = []
+                st.session_state.generation_status = {"status": "idle"}
+                st.rerun()
 
     # 4. CHAT INPUT (Absolute bottom of the script = Absolute bottom of the UI)
     if prompt := st.chat_input("Ask a question about your codebase..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
+        
+        # Format history
+        history_msgs = st.session_state.messages[:-1] 
+        formatted_history = "\n".join([f"[{msg['role'].upper()}]: {msg['content']}" for msg in history_msgs])
+        
+        # Initialize background state
+        st.session_state.generation_chunks = []
+        st.session_state.generation_status = {"status": "pending", "stop_requested": False}
+        st.session_state.is_generating = True
+        
+        # Start background thread
+        t = threading.Thread(
+            target=background_query_runner,
+            args=(
+                st.session_state.active_repo,
+                prompt,
+                4096,
+                st.session_state.target_path,
+                formatted_history,
+                st.session_state.generation_chunks,
+                st.session_state.generation_status
+            ),
+            daemon=True
+        )
+        t.start()
         st.rerun() # Instantly trigger the generation block above
 
 
 # ==========================================
 # TAB 2: INTERACTIVE ARCHITECTURE MAP
 # ==========================================
-with tab_map:
+elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
     st.markdown("### Codebase Topography")
     st.caption("Explore the semantic relationships. Click any node to open the embedded context inspector and chat sidepanel.")
     

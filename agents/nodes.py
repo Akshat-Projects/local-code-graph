@@ -18,7 +18,7 @@ if hasattr(langchain_openai_base, "_convert_delta_to_message_chunk"):
     original_convert = langchain_openai_base._convert_delta_to_message_chunk
     
     def patched_convert(_dict, default_class):
-        logger.info(f"[DIAG] patched _convert_delta_to_message_chunk fired. keys={list(_dict.keys()) if hasattr(_dict, 'keys') else type(_dict)}")
+        # logger.info(f"[DIAG] patched _convert_delta_to_message_chunk fired. keys={list(_dict.keys()) if hasattr(_dict, 'keys') else type(_dict)}")
         chunk = original_convert(_dict, default_class)
         
         reasoning = None
@@ -27,7 +27,7 @@ if hasattr(langchain_openai_base, "_convert_delta_to_message_chunk"):
         else:
             reasoning = getattr(_dict, "reasoning_content", None)
             
-        logger.info(f"[DIAG] reasoning_content found: {reasoning is not None}")
+        # logger.info(f"[DIAG] reasoning_content found: {reasoning is not None}")
         if reasoning:
             chunk.additional_kwargs["reasoning_content"] = reasoning
         return chunk
@@ -42,7 +42,7 @@ if hasattr(langchain_openai_base, "_convert_dict_to_message"):
     original_convert_dict = langchain_openai_base._convert_dict_to_message
     
     def patched_convert_dict(_dict):
-        logger.info(f"[DIAG] patched _convert_dict_to_message fired. keys={list(_dict.keys()) if hasattr(_dict, 'keys') else type(_dict)}")
+        # logger.info(f"[DIAG] patched _convert_dict_to_message fired. keys={list(_dict.keys()) if hasattr(_dict, 'keys') else type(_dict)}")
         message = original_convert_dict(_dict)
         reasoning = _dict.get("reasoning_content")
         if reasoning:
@@ -175,11 +175,22 @@ async def synthesizer_node(state: GraphRAGState):
             "predicted_n": output_tokens,
             "total_tokens": usage.get("total_tokens", input_tokens + output_tokens),
         }
+    else:
+        # Fallback estimation (approx. 4 characters per token)
+        input_len = len(combined_context)
+        output_len = len(response.content) if response.content else 0
+        prompt_tokens = max(1, input_len // 4)
+        predicted_tokens = max(1, output_len // 4)
+        telemetry = {
+            "prompt_n": prompt_tokens,
+            "predicted_n": predicted_tokens,
+            "total_tokens": prompt_tokens + predicted_tokens,
+        }
     
     # Write the final answer to the whiteboard
     return {"final_response": response.content, "telemetry": telemetry}
 
-@timeit(attach_as="elaspsed_seconds")
+@timeit(attach_as="elapsed_seconds")
 async def conversational_node(state: GraphRAGState):
     """Handles pure small talk, bypassing the codebase completely."""
     user_query = state["user_query"]
@@ -192,4 +203,26 @@ async def conversational_node(state: GraphRAGState):
     chain = prompt | llm 
     response = await chain.ainvoke({"chat_history": chat_history, "user_query": user_query})
     
-    return {"final_response": response.content}
+    telemetry = None
+    usage = getattr(response, "usage_metadata", None)
+    if usage:
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        telemetry = {
+            "prompt_n": input_tokens,
+            "predicted_n": output_tokens,
+            "total_tokens": usage.get("total_tokens", input_tokens + output_tokens),
+        }
+    else:
+        # Fallback estimation
+        input_len = len(chat_history) + len(user_query)
+        output_len = len(response.content) if response.content else 0
+        prompt_tokens = max(1, input_len // 4)
+        predicted_tokens = max(1, output_len // 4)
+        telemetry = {
+            "prompt_n": prompt_tokens,
+            "predicted_n": predicted_tokens,
+            "total_tokens": prompt_tokens + predicted_tokens,
+        }
+        
+    return {"final_response": response.content, "telemetry": telemetry}

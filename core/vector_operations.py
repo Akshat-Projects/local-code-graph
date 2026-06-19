@@ -9,21 +9,33 @@ from utils.logger import get_logger
 
 logger = get_logger()
 
+_ENCODER_CACHE = {}
+
+def get_shared_encoder(repo_id: str, filename: str) -> Llama:
+    key = (repo_id, filename)
+    if key not in _ENCODER_CACHE:
+        logger.info(f"Loading shared embedding encoder model: {filename} (first time)...")
+        _ENCODER_CACHE[key] = Llama.from_pretrained(
+            repo_id=repo_id,
+            filename=filename,
+            embedding=True, # CRITICAL: Tells llama.cpp to return vectors, not text
+            n_ctx=2048,
+            verbose=False
+        )
+    return _ENCODER_CACHE[key]
+
 class HybridVectorStore:
     def __init__(self, repo_name: str, persist_directory: str = "./data/vector_store"):
         self.repo_name = repo_name
         self.persist_dir = os.path.join(persist_directory, repo_name)
         os.makedirs(self.persist_dir, exist_ok=True)
         
-        logger.info("Pulling EmbeddingGemma-300m GGUF (~300MB)...")
+        logger.info("Initializing EmbeddingGemma-300m GGUF encoder...")
 
-        # 1 & 2. Download and Initialize the lightweight C++ backend directly
-        self.encoder = Llama.from_pretrained(
+        # Get shared global encoder instance to prevent reloading weights on every query
+        self.encoder = get_shared_encoder(
             repo_id="ggml-org/embeddinggemma-300M-GGUF",
-            filename="embeddinggemma-300M-Q8_0.gguf",
-            embedding=True, # CRITICAL: Tells llama.cpp to return vectors, not text
-            n_ctx=2048,
-            verbose=False
+            filename="embeddinggemma-300M-Q8_0.gguf"
         )
         
         # 3. Our chosen Matryoshka dimension
@@ -92,8 +104,18 @@ class HybridVectorStore:
                 continue
                 
             self.metadata.append({"node_id": data["node_id"]})
-            texts_for_bm25.append(summary)
-            
+            # With:
+            api_calls_str = data.get("api_calls", "")
+            if api_calls_str:
+                # Append literal call names to BM25 corpus only.
+                # FAISS stays purely semantic (summary only).
+                # This lets BM25 exact-match "HoughCircles" even if the
+                # LLM summary paraphrased it as "circle detection".
+                bm25_text = f"{summary} {api_calls_str.replace(',', ' ')}"
+            else:
+                bm25_text = summary
+            texts_for_bm25.append(bm25_text)
+                        
             # Asymmetric Document Format
             formatted_doc = f"title: {data['node_id']} | text: {summary}"
             dense_documents.append(formatted_doc)

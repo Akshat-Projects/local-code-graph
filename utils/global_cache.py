@@ -11,6 +11,11 @@ GRAPH_MTIME = {}
 async def load_graph_cached(graph_path: str | os.PathLike) -> nx.MultiDiGraph:
     """Loads a NetworkX graph from a GraphML file with global in-memory caching."""
     graph_path_str = str(graph_path)
+    
+    if not os.path.exists(graph_path_str):
+        logger.warning(f"Graph file does not exist at: {graph_path_str}. Returning empty graph.")
+        return nx.MultiDiGraph()
+        
     current_mtime = os.path.getmtime(graph_path_str)
     
     if (

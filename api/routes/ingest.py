@@ -20,7 +20,7 @@ from utils.global_cache import load_graph_cached
 from utils.constants import SecurityConstraints
 from utils.helper import get_ignore_spec
 from utils.logger import get_logger
-
+from utils.constants import NodeTypes
 
 
 logger = get_logger()
@@ -127,9 +127,11 @@ async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str
         # --- GHOST NODE DETECTOR & RESURRECTION ---
         missing_nodes = []
         for n, d in librarian.graph.nodes(data=True):
-            if d.get("type") not in ["file", "class", "function"]:
+            # if d.get("type") not in ["file", "class", "function"]:
+            #     continue
+            if d.get("type") not in NodeTypes.STRUCTURAL:
                 continue
-                
+            
             # 1. Intercept configs and mark them complete instantly
             label = str(n).split("::")[-1].lower()
             if label.endswith(('.json', '.yml', '.yaml', '.txt', '.toml', '.md')):

@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from core.librarian import Librarian
 from models.query_llm import QueryRequest, NodeChatRequest
-from utils.helper import validate_ingestion_path
+from utils.helper import validate_ingestion_path, secure_path_join
 from intelligence_layer.query_engine import GraphQueryEngine
 from intelligence_layer.kernel_client import LocalKernelFactory
 from utils.logger import get_logger
@@ -107,7 +107,7 @@ async def ask_codebase(request: QueryRequest):
                         output = event.get("data", {}).get("output", {})
                         telemetry = output.get("telemetry") if isinstance(output, dict) else None
                         elapsed = output.get("elapsed_seconds") if isinstance(output, dict) else None
-                        if telemetry and elapsed:
+                        if telemetry and elapsed is not None:
                             predicted_n = telemetry.get("predicted_n", 0)
                             payload = {
                                 **telemetry,
@@ -190,7 +190,6 @@ async def chat_with_node(repo_name: str, req: NodeChatRequest):
     summary = node_data.get("summary", "No summary available.")
     
     logger.info(f"Chat request for {req.node_id}: {req.question}")
-    
     if req.target_path:
         # Node IDs are usually formatted like "path/to/file.py::ClassName::method" or "path/to/file.py"
         # We split by "::" to get just the file path, or strip the "file::" prefix.
@@ -199,16 +198,17 @@ async def chat_with_node(repo_name: str, req: NodeChatRequest):
             file_rel_path = node_id_str[6:]
         else:
             file_rel_path = node_id_str.split("::")[0]
-        full_file_path = Path(req.target_path) / file_rel_path
         
         try:
+            full_file_path = secure_path_join(req.target_path, file_rel_path)
             if full_file_path.exists() and full_file_path.is_file():
                 # Read the actual file directly from the hard drive!
                 with open(full_file_path, "r", encoding="utf-8") as f:
                     raw_code = f.read()
+        except HTTPException as he:
+            raise he
         except Exception as e:
             logger.warning(f"Could not read live code for {req.node_id}: {e}")
-    
     # 3. The Real LLM Integration
     prompt = f"""
     You are an expert software architect analyzing a specific codebase component.

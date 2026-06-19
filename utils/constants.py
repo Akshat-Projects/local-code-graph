@@ -23,3 +23,16 @@ class AllowedTypes():
     ".cs", ".rb", ".swift", ".kt", ".r", ".sql", ".json", ".yaml",
     ".yml", '.txt', '.toml'
     }
+    
+class NodeTypes:
+    FILE = "file"
+    CLASS = "class"
+    FUNCTION = "function"
+    SCRIPT_BLOCK = "script_block"  # Phase 1b addition
+    
+    # Every consumer that filters by type imports this set
+    # instead of hardcoding ["file", "class", "function"]
+    STRUCTURAL = {FILE, CLASS, FUNCTION, SCRIPT_BLOCK}
+    
+    # Ghost-node resurrection and status endpoint skip these
+    NON_SUMMARIZABLE = {"library", "infrastructure"}
