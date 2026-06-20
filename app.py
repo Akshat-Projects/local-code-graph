@@ -650,7 +650,6 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
                     st.session_state.last_graph_data = graph_data 
                     
                     vis_nodes = []
-                    community_counts = {}
                     node_colors = {} 
                     
                     # --- NEW: 35-Color Dark-Mode Optimized Palette ---
@@ -659,23 +658,43 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
                         "#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", 
                         "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC",
                         # Cyberpunk / Neons (High contrast on dark bg)
-                        "#00E5FF", "#FF007F", "#39FF14", "#FF4500", "#B452CD",
-                        "#FEE715", "#00FF7F", "#FF3855", "#9D00FF", "#FFAA1D",
-                        # Bright Pastels & Jewels (Easy on the eyes)
-                        "#87CEFA", "#FFB6C1", "#98FB98", "#DDA0DD", "#F0E68C",
-                        "#20B2AA", "#FF7F50", "#EE82EE", "#7B68EE", "#00FA9A",
-                        # Bold Accents
-                        "#FF8C00", "#1E90FF", "#C71585", "#32CD32", "#DAA520"
+                        # "#00E5FF", "#FF007F", "#39FF14", "#FF4500", "#B452CD",
+                        # "#FEE715", "#00FF7F", "#FF3855", "#9D00FF", "#FFAA1D",
+                        # # Bright Pastels & Jewels (Easy on the eyes)
+                        # "#87CEFA", "#FFB6C1", "#98FB98", "#DDA0DD", "#F0E68C",
+                        # "#20B2AA", "#FF7F50", "#EE82EE", "#7B68EE", "#00FA9A",
+                        # # Bold Accents
+                        # "#FF8C00", "#1E90FF", "#C71585", "#32CD32", "#DAA520"
                     ]
                     
-                    # 1. Safely Parse Nodes
+                    # 1. Count communities
+                    community_counts = {}
                     for n in graph_data.get("nodes", []):
                         comm_id = str(n.get("group", "0"))
-                        if comm_id not in community_counts:
-                            community_counts[comm_id] = 0
-                        community_counts[comm_id] += 1
+                        community_counts[comm_id] = community_counts.get(comm_id, 0) + 1
                         
-                        color_hex = extended_palette[len(community_counts) % len(extended_palette)]
+                    # 2. Sort communities safely (Fixed to prevent string/int comparison crashes)
+                    def safe_community_key(item):
+                        cid = item[0]
+                        last_word = cid.split()[-1] if cid.strip() else ""
+                        if last_word.isdigit():
+                            return (0, int(last_word))
+                        elif cid.isdigit():
+                            return (0, int(cid))
+                        else:
+                            return (1, cid)
+
+                    sorted_communities = sorted(community_counts.items(), key=safe_community_key)
+
+                    # 3. Assign colors to communities based on sorted order
+                    community_colors = {}
+                    for idx, (cid, _) in enumerate(sorted_communities):
+                        community_colors[cid] = extended_palette[idx % len(extended_palette)]
+                    
+                    # 4. Safely Parse Nodes using the assigned community colors
+                    for n in graph_data.get("nodes", []):
+                        comm_id = str(n.get("group", "0"))
+                        color_hex = community_colors.get(comm_id, "#4E79A7")
                         node_colors[n["id"]] = color_hex 
                         
                         vis_nodes.append({
@@ -692,7 +711,7 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
                             "_is_pending": n.get("_is_pending", False)
                         })
                         
-                    # 2. Safely Parse Edges (Absolutely NO "source" or "target" here!)
+                    # 5. Safely Parse Edges (Absolutely NO "source" or "target" here!)
                     vis_edges = []
                     for e in graph_data.get("edges", []):
                         source_id = e.get("from")
@@ -710,16 +729,10 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
                             "width": 0.4           
                         })
                         
-                    # 3. Safely Parse Legend (Fixed to prevent string/int comparison crashes)
+                    # 6. Safely Parse Legend using the same community colors
                     vis_legend = []
-                    sorted_communities = sorted(community_counts.items(), key= lambda x: int(x[0].split(" ")[-1]))
-                    # sorted_communities = sorted(
-                    #     community_counts.items(), 
-                    #     key=lambda x: int(x[0]) if str(x[0]).isdigit() else str(x[0])
-                    # )
-                    
                     for cid, count in sorted_communities:
-                        color_hex = extended_palette[len(vis_legend) % len(extended_palette)]
+                        color_hex = community_colors.get(cid, "#4E79A7")
                         vis_legend.append({
                             "cid": cid, 
                             "color": color_hex, 

@@ -151,6 +151,9 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         </div>
         <div id="legend"></div>
         </div>
+        <div id="stats-footer" style="padding: 12px; border-top: 1px solid #2a2a4e; font-size: 11.5px; color: #a0aec0; text-align: center; background: #141424; font-family: sans-serif; letter-spacing: 0.3px;">
+            <span id="stats-text">0 nodes · 0 edges · 0 communities</span>
+        </div>
     </div>
     <script>
     """
@@ -619,6 +622,8 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         item.onclick = (e) => { if (e.target === cb) return; cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); };
         legendEl.appendChild(item);
     });
+    
+    document.getElementById('stats-text').textContent = `${RAW_NODES.length} nodes · ${RAW_EDGES.length} edges · ${LEGEND.length} communities`;
     """
 
     html_foot = """
