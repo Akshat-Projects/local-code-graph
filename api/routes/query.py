@@ -3,7 +3,6 @@ import json
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pathlib import Path
-import networkx as nx
 from fastapi.responses import StreamingResponse
 
 from core.librarian import Librarian

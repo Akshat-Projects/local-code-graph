@@ -56,6 +56,8 @@ if "generation_chunks" not in st.session_state:
     st.session_state.generation_chunks = []
 if "generation_status" not in st.session_state:
     st.session_state.generation_status = {"status": "idle"}
+if "view_mode" not in st.session_state:
+    st.session_state.view_mode = "💬 AI Assistant"
 
 # Top level autorefresh when background thread is active and user is viewing the chat
 if st.session_state.is_generating and st.session_state.get("view_mode", "💬 AI Assistant") == "💬 AI Assistant":
@@ -187,10 +189,9 @@ st.title("🧠 LocalGraph RAG Terminal")
 st.caption(f"Currently querying isolated graph database: **{st.session_state.active_repo}**")
 
 # Create navigation menu at the top
-st.radio(
+st.segmented_control(
     "Navigation",
     ["💬 AI Assistant", "🕸️ Interactive Architecture Map"],
-    horizontal=True,
     label_visibility="collapsed",
     key="view_mode"
 )
@@ -308,7 +309,7 @@ def build_graph_objects(raw_data, show_functions, search_term, expanded_classes,
             target=e["target"],
             label=e["label"],
             color="#4a5568",
-            width=0.5,
+            width=0.3,
         )
         for e in all_edges
         if e["source"] in visible_ids and e["target"] in visible_ids
@@ -385,6 +386,8 @@ def render_graph_health_banner(repo_name: str, layout_context: str = "visualizer
     DRY Helper to fetch graph status and render warnings dynamically.
     layout_context can be 'visualizer' or 'chatbot'.
     """
+    if not repo_name or not repo_name.strip():
+        return False
     try:
         res = requests.get(f"{API_BASE}/query/status/{repo_name}")
         if res.status_code == 200:
@@ -566,9 +569,10 @@ if st.session_state.view_mode == "💬 AI Assistant":
                 # The on_click callback saves the partial text BEFORE Streamlit reruns
                 st.button("🛑 Stop", key="stop_btn", on_click=stop_generation)
 
-            # Render standard markdown directly without st.empty() to allow React VDOM in-place updates
+            # Render standard markdown via a persistent placeholder to allow React VDOM in-place updates without redraws
+            content_placeholder = st.empty()
             if temp_content:
-                st.markdown(temp_content)
+                content_placeholder.markdown(temp_content)
                 
             if st.session_state.latest_telemetry:
                 render_telemetry_ui(st.session_state.latest_telemetry)

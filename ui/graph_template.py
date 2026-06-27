@@ -299,7 +299,7 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
                 .nodeColor('color')
                 .nodeVal('val') 
                 .linkWidth(0.5)
-                .linkColor(() => '#3a3a5e')
+                .linkColor(link => link.color || '#3a3a5e')
                 .onNodeClick(node => focusNode(node.id))
                 .onBackgroundClick(deselectNode); 
                 
@@ -325,7 +325,8 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
                 .filter(e => validNodeIds.has(String(e.from)) && validNodeIds.has(String(e.to)))
                 .map(e => ({
                     source: String(e.from),
-                    target: String(e.to)
+                    target: String(e.to),
+                    color: e.color
                 }));
             
             Graph3D.graphData({ nodes: nodes3D, links: links3D });

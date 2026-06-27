@@ -161,10 +161,16 @@ class UniversalParser:
         if filename in target_configs:
             file_node_id = self._register_file_node(relative_path, file_hash)
             self.config_extractor.extract(absolute_path, relative_path, file_node_id)
+            self.graph.nodes[file_node_id]["summary"] = "Configuration/Documentation file."
+            self.graph.nodes[file_node_id]["_is_pending"] = False
+            self.graph.nodes[file_node_id]["analysis_status"] = "complete"
             return
 
-        if ext not in LANGUAGE_CONFIG:
-            self._register_file_node(relative_path, file_hash)
+        if ext not in LANGUAGE_CONFIG or "lang" not in LANGUAGE_CONFIG[ext]:
+            file_node_id = self._register_file_node(relative_path, file_hash)
+            self.graph.nodes[file_node_id]["summary"] = "Configuration/Documentation file."
+            self.graph.nodes[file_node_id]["_is_pending"] = False
+            self.graph.nodes[file_node_id]["analysis_status"] = "complete"
             return
 
         lang_type = LANGUAGE_CONFIG[ext]["type"]
@@ -202,6 +208,9 @@ class UniversalParser:
         file_node_id = self._register_file_node(relative_path, file_hash)  # ← MOVED HERE
 
         if lang_type == "html":
+            self.graph.nodes[file_node_id]["summary"] = "HTML file."
+            self.graph.nodes[file_node_id]["_is_pending"] = False
+            self.graph.nodes[file_node_id]["analysis_status"] = "complete"
             return
 
         language_obj = LANGUAGE_CONFIG[ext]["lang"]
@@ -399,7 +408,19 @@ class UniversalParser:
             class_node_id, type="class", name=name, file_path=path,
             line_start=start, line_end=end, summary="", analysis_status="pending"
         )
-        self.graph.add_edge(file_id, class_node_id, relation="contains")
+        exists = False
+        if self.graph.has_edge(file_id, class_node_id):
+            if self.graph.is_multigraph():
+                for existing_attrs in self.graph[file_id][class_node_id].values():
+                    if existing_attrs.get("relation") == "contains":
+                        exists = True
+                        break
+            else:
+                existing_attrs = self.graph[file_id][class_node_id]
+                if existing_attrs.get("relation") == "contains":
+                    exists = True
+        if not exists:
+            self.graph.add_edge(file_id, class_node_id, relation="contains", confidence="EXTRACTED", confidence_score=1.0)
 
     def _register_function(self, func_node_id, name, path, file_id, parent_class_id, start, end):
         self.graph.add_node(
@@ -409,6 +430,30 @@ class UniversalParser:
             signature=f"{name}()", summary="", analysis_status="pending"
         )
         if parent_class_id:
-            self.graph.add_edge(parent_class_id, func_node_id, relation="defines")
+            exists = False
+            if self.graph.has_edge(parent_class_id, func_node_id):
+                if self.graph.is_multigraph():
+                    for existing_attrs in self.graph[parent_class_id][func_node_id].values():
+                        if existing_attrs.get("relation") == "defines":
+                            exists = True
+                            break
+                else:
+                    existing_attrs = self.graph[parent_class_id][func_node_id]
+                    if existing_attrs.get("relation") == "defines":
+                        exists = True
+            if not exists:
+                self.graph.add_edge(parent_class_id, func_node_id, relation="defines", confidence="EXTRACTED", confidence_score=1.0)
         else:
-            self.graph.add_edge(file_id, func_node_id, relation="contains")
+            exists = False
+            if self.graph.has_edge(file_id, func_node_id):
+                if self.graph.is_multigraph():
+                    for existing_attrs in self.graph[file_id][func_node_id].values():
+                        if existing_attrs.get("relation") == "contains":
+                            exists = True
+                            break
+                else:
+                    existing_attrs = self.graph[file_id][func_node_id]
+                    if existing_attrs.get("relation") == "contains":
+                        exists = True
+            if not exists:
+                self.graph.add_edge(file_id, func_node_id, relation="contains", confidence="EXTRACTED", confidence_score=1.0)

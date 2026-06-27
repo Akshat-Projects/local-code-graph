@@ -124,64 +124,6 @@ async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str
                 "current_file": status_message
             }
             
-        # --- GHOST NODE DETECTOR & RESURRECTION ---
-        missing_nodes = []
-        for n, d in librarian.graph.nodes(data=True):
-            # if d.get("type") not in ["file", "class", "function"]:
-            #     continue
-            if d.get("type") not in NodeTypes.STRUCTURAL:
-                continue
-            
-            # 1. Intercept configs and mark them complete instantly
-            label = str(n).split("::")[-1].lower()
-            if label.endswith(('.json', '.yml', '.yaml', '.txt', '.toml', '.md')):
-                librarian.graph.nodes[n]["summary"] = "Configuration/Documentation file."
-                librarian.graph.nodes[n]["_is_pending"] = False
-                librarian.graph.nodes[n]["analysis_status"] = "complete"
-                continue
-                
-            # 2. Check for missing summaries on actual source code
-            summary = d.get("summary")
-            if not summary or summary in ["pending", "No summary available."]:
-                missing_nodes.append(n)
-
-        if missing_nodes:
-            logger.warning(f"👻 FOUND {len(missing_nodes)} GHOST NODES. First 20: {missing_nodes[:20]}")
-            
-            for node_id in missing_nodes:
-                # Wake up the node
-                librarian.graph.nodes[node_id]["analysis_status"] = "pending"
-                librarian.graph.nodes[node_id]["_is_pending"] = True
-                
-                parts = str(node_id).split("::")
-                file_path = parts[0] if parts[0] != "file" else parts[-1]
-                
-                # modified_files.add(file_path)
-
-                # for fn_id in {file_path, f"file::{file_path}"}:
-                #     if fn_id in librarian.graph:
-                #         librarian.graph.nodes[fn_id]["analysis_status"] = "pending"
-                #         librarian.graph.nodes[fn_id]["_is_pending"] = True
-                #         librarian.graph.nodes[fn_id]["summary"] = "pending"
-                
-                # 🚀 FIX 1: Trick the modified_files set
-                if (target_dir / file_path).exists():
-                    modified_files.add(file_path)
-                    
-                    # 🚀 FIX 2: Hack the manifest so the assembler believes it changed
-                    if hasattr(librarian, "manifest") and file_path in librarian.manifest:
-                        librarian.manifest[file_path]["status"] = "modified"
-                        
-                # 🚀 FIX 3: Force the parent file node to be pending!
-                # If the assembler sees the file is "complete", it ignores the functions inside it.
-                file_node_candidates = [file_path, f"file::{file_path}"]
-                for fn_id in file_node_candidates:
-                    if fn_id in librarian.graph:
-                        librarian.graph.nodes[fn_id]["analysis_status"] = "pending"
-                        librarian.graph.nodes[fn_id]["_is_pending"] = True
-                
-            librarian.save_graph()
-        
         # Phase 2: LLM Semantic Analysis
         if req.run_llm:
             update_progress(current=50, total=100, status_message="Running Deep LLM Analysis....", job_id=job_id)

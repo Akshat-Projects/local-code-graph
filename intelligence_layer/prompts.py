@@ -19,7 +19,8 @@ Read the provided source code module, summarize its operational logic, and extra
    - If a dependency is in the list, extract it.
    - If it is NOT in the list (e.g., `os`, `numpy`), IGNORE IT.
 3. RELATION TYPE: Strictly categorize as `calls`, `instantiates`, or `inherits`.
-4. Append a list of 5-7 important keywords/tags that will be useful for semantic vector search. 
+4. CONFIDENCE SCORE: Estimate your confidence_score for the inferred dependency relation as a float between 0.0 and 1.0 (where 1.0 is high confidence, and below 0.5 indicates uncertainty).
+5. Append a list of 5-7 important keywords/tags that will be useful for semantic vector search. 
    CRITICAL: You MUST explicitly include the exact names of major algorithms, libraries, or specific technical functions used in this file (e.g., cv2.HoughCircles, SQLAlchemy, Regex patterns).
 
 ### OUTPUT FORMAT:

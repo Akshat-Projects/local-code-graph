@@ -116,8 +116,9 @@ class GraphAnalyst:
         # Concurrency limit for local/remote LLM calls
         sem = asyncio.Semaphore(5)
 
-        async def analyze_single_batch(file_node, batch_data):
+        async def analyze_single_batch(batch_key, batch_data):
             nonlocal completed_batches
+            file_node = batch_key.split("::chunk_")[0]
             # --- Announce the file BEFORE waiting for the LLM! ---
             if progress_callback:
                 progress_callback(
@@ -221,9 +222,26 @@ class GraphAnalyst:
                             for edge in node_data.dependencies:
                                 target_id = edge.target_id
                                 if target_id in self.librarian.graph:
-                                    self.librarian.graph.add_edge(
-                                        node_id, target_id, relation=edge.relation
-                                    )
+                                    # Deduplicate: check if an edge with the same relation already exists
+                                    exists = False
+                                    if self.librarian.graph.has_edge(node_id, target_id):
+                                        if self.librarian.graph.is_multigraph():
+                                            for existing_attrs in self.librarian.graph[node_id][target_id].values():
+                                                if existing_attrs.get("relation") == edge.relation:
+                                                    exists = True
+                                                    break
+                                        else:
+                                            existing_attrs = self.librarian.graph[node_id][target_id]
+                                            if existing_attrs.get("relation") == edge.relation:
+                                                exists = True
+                                    if not exists:
+                                        self.librarian.graph.add_edge(
+                                            node_id,
+                                            target_id,
+                                            relation=edge.relation,
+                                            confidence=edge.confidence,
+                                            confidence_score=edge.confidence_score
+                                        )
 
                         # --- Catch LLM Laziness/Omissions ---
                         omitted_nodes = set(target_node_ids) - processed_nodes
@@ -238,6 +256,21 @@ class GraphAnalyst:
                         async with self.save_lock:
                             graph_copy = self.librarian.graph.copy()
                             await asyncio.to_thread(self.librarian.save_graph, graph_copy)
+
+                        # Write to extraction cache if all structural nodes for this file are complete
+                        file_node_id = f"file::{batch_data['file_path']}"
+                        file_hash = self.librarian.graph.nodes.get(file_node_id, {}).get("hash", "")
+                        if file_hash:
+                            file_nodes = [
+                                nid for nid, ndata in self.librarian.graph.nodes(data=True)
+                                if ndata.get("file_path") == batch_data['file_path'] and nid != file_node_id
+                            ]
+                            all_complete = all(
+                                self.librarian.graph.nodes[nid].get("analysis_status") == "complete"
+                                for nid in file_nodes
+                            )
+                            if all_complete:
+                                self.librarian.write_to_cache(batch_data['file_path'], file_hash)
 
                     except ValidationError as e:
                         logger.error(
@@ -276,6 +309,11 @@ class GraphAnalyst:
                     async with self.save_lock:
                         graph_copy = self.librarian.graph.copy()
                         await asyncio.to_thread(self.librarian.save_graph, graph_copy)
+                    
+                    file_node_id = f"file::{batch_data['file_path']}"
+                    file_hash = self.librarian.graph.nodes.get(file_node_id, {}).get("hash", "")
+                    if file_hash:
+                        self.librarian.write_to_cache(batch_data['file_path'], file_hash)
                 
                 # Progress update callback
                 async with progress_lock:
@@ -290,8 +328,8 @@ class GraphAnalyst:
 
         # Build list of concurrent tasks
         tasks = [
-            analyze_single_batch(file_node, batch_data)
-            for file_node, batch_data in batches.items()
+            analyze_single_batch(batch_key, batch_data)
+            for batch_key, batch_data in batches.items()
         ]
         
         # Run tasks concurrently

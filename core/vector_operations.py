@@ -25,9 +25,9 @@ def get_shared_encoder(repo_id: str, filename: str) -> Llama:
     return _ENCODER_CACHE[key]
 
 class HybridVectorStore:
-    def __init__(self, repo_name: str, persist_directory: str = "./data/vector_store"):
+    def __init__(self, repo_name: str, persist_directory: str = ".localgraph/storage"):
         self.repo_name = repo_name
-        self.persist_dir = os.path.join(persist_directory, repo_name)
+        self.persist_dir = os.path.join(persist_directory, repo_name, "vector_store")
         os.makedirs(self.persist_dir, exist_ok=True)
         
         logger.info("Initializing EmbeddingGemma-300m GGUF encoder...")
