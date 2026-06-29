@@ -33,17 +33,49 @@ JOB_STORE: Dict[str, Dict[str, Any]] = {}
 
 def assign_communities(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
     # Convert networkx → igraph
-    ig_graph = ig.Graph.from_networkx(G.to_undirected())
-    partition = leidenalg.find_partition(
+    undirected_g = G.to_undirected()
+    ig_graph = ig.Graph.from_networkx(undirected_g)
+    
+    # 1. Macro partition
+    partition_macro = leidenalg.find_partition(
         ig_graph, 
         leidenalg.ModularityVertexPartition
     )
     
-    # Write community ID back to each node using the deterministic _nx_name
+    # Write macro community back
+    macro_membership = {}
     for vertex in ig_graph.vs:
         nx_node_id = vertex["_nx_name"]
-        G.nodes[nx_node_id]["community"] = partition.membership[vertex.index]
+        comp_id = partition_macro.membership[vertex.index]
+        macro_membership[nx_node_id] = comp_id
+        G.nodes[nx_node_id]["community_macro"] = comp_id
+        G.nodes[nx_node_id]["community"] = comp_id  # Keep fallback
         
+    # 2. Micro sub-clustering
+    macro_groups = {}
+    for node_id, comp_id in macro_membership.items():
+        macro_groups.setdefault(comp_id, []).append(node_id)
+        
+    for macro_id, node_list in macro_groups.items():
+        if len(node_list) > 4:
+            try:
+                subgraph = undirected_g.subgraph(node_list)
+                ig_sub = ig.Graph.from_networkx(subgraph)
+                partition_micro = leidenalg.find_partition(
+                    ig_sub,
+                    leidenalg.ModularityVertexPartition
+                )
+                for vertex in ig_sub.vs:
+                    nx_node_id = vertex["_nx_name"]
+                    micro_id = partition_micro.membership[vertex.index]
+                    G.nodes[nx_node_id]["community_micro"] = f"{macro_id}_{micro_id}"
+            except Exception:
+                for nx_node_id in node_list:
+                    G.nodes[nx_node_id]["community_micro"] = f"{macro_id}_0"
+        else:
+            for nx_node_id in node_list:
+                G.nodes[nx_node_id]["community_micro"] = f"{macro_id}_0"
+                
     return G
 
 
@@ -92,6 +124,9 @@ async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str
                 if file_meta["status"] == "modified":
                     modified_files.add(rel_path)
                     parser.parse_file(file_meta["absolute_path"], rel_path, file_meta["hash"])
+                    
+            # Pass 2: Resolve static import and call linkages across all parsed files
+            parser.resolve_all_calls()
                     
             # --- ORPHAN PRUNING ---
             logger.info("Pruning external library calls from the graph...")
@@ -232,12 +267,12 @@ async def get_job_status(job_id: str):
         message=job_data.get("message"),
         details=job_data.get("details")
     )
-    
 @router.get("/visualize/{repo_name}")
 async def get_graph_visualization(
     repo_name: str,
     target_path: str | None = None,
-    show_configs: bool = False
+    show_configs: bool = False,
+    hierarchy_level: str = "macro"
 ):
     """Returns the graph data formatted for vis.js / streamlit-agraph."""
     # 1. Get the absolute path to the root of your Python project securely
@@ -321,7 +356,7 @@ async def get_graph_visualization(
                 font_size = 0  
                 font_color = "#A0AEC0"
                 mass = 1
-
+ 
             if not label.endswith(('.json', '.yml', '.yaml', '.txt', '.toml')):
                 if degree >= 10:
                     font_size = 12
@@ -347,8 +382,12 @@ async def get_graph_visualization(
                 raw_title = summary
                 
             wrapped_title = textwrap.fill(raw_title, width=60)
+            
             # --- USE ALGORITHMIC LEIDEN COMMUNITIES ---
-            community_id = data.get("community", file_group)
+            if hierarchy_level == "micro":
+                community_id = data.get("community_micro", data.get("community_macro", file_group))
+            else:
+                community_id = data.get("community_macro", data.get("community", file_group))
             
             nodes.append({
                 "id": str(node_id),
@@ -370,14 +409,59 @@ async def get_graph_visualization(
             
         # Format Edges
         for source, target, data in G.edges(data=True):
-            display_label = ""
-            
             # --- Only add the edge if BOTH nodes are visible! ---
-            if str(source) in valid_node_ids and str(target) in valid_node_ids:            
+            if str(source) in valid_node_ids and str(target) in valid_node_ids:
+                relation = data.get("relation", "uses")
+                confidence = data.get("confidence", "INFERRED")
+                
+                # Determine display label & tooltip
+                # Categorised as: uses [inferred], calls [extracted], method [extracted], contains [extracted], infers [extracted]
+                if relation == "contains":
+                    label_desc = "contains [extracted]"
+                    width = 1.0
+                    dashes = [4, 4]  # dashed
+                    color = "#718096" # grey
+                elif relation == "defines":
+                    label_desc = "method [extracted]"
+                    width = 1.0
+                    dashes = False   # solid
+                    color = "#4A5568" # darker grey
+                elif relation == "calls":
+                    is_inferred = (confidence == "INFERRED")
+                    label_desc = f"calls [{'inferred' if is_inferred else 'extracted'}]"
+                    width = 2.0
+                    dashes = [6, 4] if is_inferred else False
+                    color = "#3182ce" # blue
+                elif relation == "depends_on":
+                    label_desc = "uses [inferred]" if confidence == "INFERRED" else "depends_on [extracted]"
+                    width = 3.0
+                    dashes = False
+                    color = "#dd6b20" # orange/gold
+                elif relation == "instantiates":
+                    label_desc = "uses [inferred]"
+                    width = 1.5
+                    dashes = [5, 5]
+                    color = "#38a169" # green
+                elif relation == "inherits":
+                    label_desc = "infers [extracted]" if confidence == "EXTRACTED" else "inherits [extracted]"
+                    width = 2.0
+                    dashes = False
+                    color = "#805ad5" # purple
+                else:
+                    label_desc = f"{relation} [{confidence.lower()}]"
+                    width = 1.5
+                    dashes = False
+                    color = "#a0aec0" # muted grey
+                    
                 edges.append({
-                    "from": str(source),   # CRITICAL FIX: Vis.js demands "from", not "source"
-                    "to": str(target),     # CRITICAL FIX: Vis.js demands "to", not "target"
-                    "label": display_label
+                    "from": str(source),
+                    "to": str(target),
+                    "title": label_desc,  # Hover tooltip
+                    "label": "",          # Keep label blank so graph is clean, but title is shown on hover!
+                    "width": width,
+                    "color": {"color": color, "highlight": color, "hover": color},
+                    "dashes": dashes,
+                    "arrows": {"to": {"enabled": True, "scaleFactor": 0.8}} if relation not in ["contains", "defines"] else {"to": {"enabled": False}}
                 })
             
         return {"nodes": nodes, "edges": edges}

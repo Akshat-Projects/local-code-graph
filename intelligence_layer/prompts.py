@@ -93,3 +93,26 @@ Chat History:
 
 User: {{$user_query}}
 """
+
+
+KEYWORD_EXTRACTION_PROMPT = """You are an expert search query analyzer for a software codebase.
+Your job is to extract only the specific code symbols, class names, function names, variable names, library/framework names, or file names from the user's input query.
+These symbols will be used for ripgrep and literal matching search.
+DO NOT extract generic conversational verbs or nouns (such as 'compare', 'show', 'snippet', 'code', 'function', 'class', 'explain', 'where', 'used', 'iterations', 'what', 'will', 'break', 'remove', 'tell', 'give', 'me', 'how').
+
+Format your response as a raw JSON list of strings. Do not include markdown code block ticks or any other commentary.
+
+Query: "Give me a code snippet of houghcircle."
+Output: ["houghcircle"]
+
+Query: "Tell me where networkx has been used and also, can you give me code on datanormalizer?"
+Output: ["networkx", "datanormalizer"]
+
+Query: "Can you compare the iterations of the functions in blood_v1.py"
+Output: ["blood_v1.py"]
+
+Query: "If I remove ast_parser.py, what will break?"
+Output: ["ast_parser.py"]
+
+Query: "{{$user_query}}"
+Output:"""

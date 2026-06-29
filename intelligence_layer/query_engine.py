@@ -18,7 +18,7 @@ from core.vector_operations import HybridVectorStore
 from intelligence_layer.kernel_client import CodebaseSearchPlugin
 from utils.global_cache import load_graph_cached
 from utils.helper import get_ignore_spec
-from intelligence_layer.prompts import GRAPH_RAG_PROMPT, AGENT_PROMPT
+from intelligence_layer.prompts import GRAPH_RAG_PROMPT, AGENT_PROMPT, KEYWORD_EXTRACTION_PROMPT
 
 logger = get_logger()
 
@@ -104,7 +104,36 @@ class GraphQueryEngine:
         self._graph_mtime = None
    
    
-    def _exact_match_search(
+    async def _extract_search_tokens_via_llm(self, query: str) -> list[str]:
+        try:
+            res = await self.kernel.invoke_prompt(
+                prompt=KEYWORD_EXTRACTION_PROMPT,
+                arguments=KernelArguments(user_query=query)
+            )
+            text = str(res).strip()
+            # Clean JSON markdown if present
+            if text.startswith("```"):
+                lines = text.splitlines()
+                if len(lines) >= 2:
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                text = "\n".join(lines).strip()
+            if text.startswith("json"):
+                text = text[4:].strip()
+            tokens = json.loads(text.strip())
+            if isinstance(tokens, list):
+                # Filter empty values and normalize
+                extracted = [str(t).strip() for t in tokens if t]
+                logger.info(f"LLM Extracted Search Tokens: {extracted}")
+                return extracted
+        except Exception as e:
+            logger.warning(f"LLM keyword extraction failed: {e}. Falling back to rule-based.")
+        return []
+
+
+    async def _exact_match_search(
         self,
         query: str,
         target_dir: Path,
@@ -150,22 +179,28 @@ class GraphQueryEngine:
             "rather", "somewhat", "highly", "extremely", "really"
         }
 
-        # 1. First, extract code-specific patterns (CamelCase, snake_case, dotted names)
-        code_tokens = re.findall(
-            r'\b[A-Z][a-z]+(?:[A-Z][a-z0-9]+)+\b'     # CamelCase
-            r'|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b'      # snake_case
-            r'|\b[a-zA-Z_]\w+\.[a-zA-Z_]\w+\b',         # dotted
-            query
-        )
+        # First, try to extract keywords via LLM agent (Option B)
+        tokens = await self._extract_search_tokens_via_llm(query)
 
-        # 2. As a fallback, extract any alphanumeric word that isn't a stopword or too short
-        all_words = re.findall(r'\b[a-zA-Z_]\w*\b', query)
-        fallback_tokens = [w for w in all_words if w.lower() not in stopwords and len(w) > 2]
+        # Fallback to rule-based keyword extraction if LLM fails or returns empty list
+        if not tokens:
+            # 1. First, extract code-specific patterns (CamelCase, snake_case, dotted names)
+            code_tokens = re.findall(
+                r'\b[A-Z][a-z]+(?:[A-Z][a-z0-9]+)+\b'     # CamelCase
+                r'|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b'      # snake_case
+                r'|\b[a-zA-Z_]\w+\.[a-zA-Z_]\w+\b',         # dotted
+                query
+            )
 
-        tokens = list(set(code_tokens + fallback_tokens))
+            # 2. As a fallback, extract any alphanumeric word that isn't a stopword or too short
+            all_words = re.findall(r'\b[a-zA-Z_]\w*\b', query)
+            fallback_tokens = [w for w in all_words if w.lower() not in stopwords and len(w) > 2]
+
+            tokens = list(set(code_tokens + fallback_tokens))
 
         if not tokens:
             return {}
+
 
         has_rg  = shutil.which("rg") is not None
         results = {}
@@ -271,12 +306,37 @@ class GraphQueryEngine:
 
         return results
         
-    def _get_relevant_subgraph(self, G: nx.Graph, query: str, chat_history: str = "", top_k: int = 15) -> tuple[nx.Graph, dict]:
+    async def _get_relevant_subgraph(self, G: nx.Graph, query: str, chat_history: str = "", top_k: int = 15) -> tuple[nx.Graph, dict]:
         search_query = query
         if chat_history:
-            context_anchor = chat_history[-150:].replace('\n', ' ')
-            search_query = f"{context_anchor} {query}"
-            logger.info(f"Enriched Vector Search Query: {search_query}")
+            try:
+                # Use LLM to consolidate query with history in a single short sentence
+                consolidation_prompt = f"""Given the following conversation history and a follow-up query, rewrite the follow-up query to be a standalone search query that contains all necessary context (like class/function/variable names, topics, or terms referred to by pronouns). Do not answer the query, just rewrite it.
+                
+                Conversation History:
+                {chat_history}
+                
+                Follow-up Query: {query}
+                
+                Standalone Search Query:"""
+                
+                decision = await self.kernel.invoke_prompt(prompt=consolidation_prompt)
+                consolidated = str(decision).strip()
+                if consolidated:
+                    search_query = consolidated
+                    logger.info(f"Consolidated Standalone Query: {search_query}")
+            except Exception as e:
+                logger.warning(f"Query consolidation failed: {e}. Falling back to combined query.")
+                # Fallback: combine last user message and current query
+                user_queries = []
+                for line in chat_history.split("\n"):
+                    if line.startswith("[USER]:"):
+                        user_queries.append(line.replace("[USER]:", "").strip())
+                if user_queries:
+                    search_query = f"{user_queries[-1]} {query}"
+                else:
+                    context_anchor = chat_history[-150:].replace('\n', ' ')
+                    search_query = f"{context_anchor} {query}"
 
         # 1. True Hybrid Search (RRF handles the exact-match heavy lifting now!)
         top_semantic_nodes = self.vector_store.search(search_query, top_k=top_k)
@@ -340,8 +400,8 @@ class GraphQueryEngine:
             logger.error(f"Failed to load graph database: {e}")
             raise FileNotFoundError("Graph database not found.")
 
-        # filtered_G = self._get_relevant_subgraph(G=G, query=user_query, chat_history=chat_history)
-        filtered_G, relevance_scores = self._get_relevant_subgraph(G=G, query=user_query, chat_history=chat_history)
+        # filtered_G = await self._get_relevant_subgraph(G=G, query=user_query, chat_history=chat_history)
+        filtered_G, relevance_scores = await self._get_relevant_subgraph(G=G, query=user_query, chat_history=chat_history)
 
         context_lines = ["# Codebase Semantic Map\n", "## Components & Logic"]
        
@@ -350,6 +410,52 @@ class GraphQueryEngine:
             if summary := data.get("summary", ""):
                 context_lines.append(f"- [{data.get('type', 'unknown').upper()}] {node_id}: {summary}")
 
+        # --- AUTOMATED STRUCTURAL AST SEARCH ---
+        structural_findings = []
+        try:
+            from core.ast_searcher import ASTSearcher
+            searcher = ASTSearcher(G)
+            
+            # A. Detect inheritance query (e.g. subclass of BaseModel)
+            inherit_match = re.search(r"(?:inherits?\s+from|subclass\s+of|extends?)\s+([a-zA-Z_]\w*)", user_query, re.IGNORECASE)
+            if inherit_match:
+                base_class = inherit_match.group(1)
+                matches = searcher.query_graph_structure({"inherits": base_class})
+                if matches:
+                    structural_findings.append(f"- Classes inheriting from '{base_class}': " + ", ".join([m["id"] for m in matches]))
+                    
+            # B. Detect calls query (e.g. what calls trigger_ingest)
+            call_match = re.search(r"(?:calls?|invokes?|uses?|calling)\s+([a-zA-Z_]\w*)", user_query, re.IGNORECASE)
+            if call_match:
+                target_symbol = call_match.group(1)
+                matches = searcher.query_graph_structure({"calls": target_symbol})
+                if matches:
+                    structural_findings.append(f"- Components invoking/calling '{target_symbol}': " + ", ".join([m["id"] for m in matches]))
+                    
+            # C. Detect template query patterns
+            for template_name in ["decorators", "exception_handlers", "async_functions", "try_catch", "interfaces"]:
+                if template_name.replace("_", " ") in user_query.lower() or template_name in user_query.lower():
+                    ext = ".py"
+                    if "javascript" in user_query.lower() or "js" in user_query.lower():
+                        ext = ".js"
+                    elif "typescript" in user_query.lower() or "ts" in user_query.lower():
+                        ext = ".ts"
+                    elif "tsx" in user_query.lower():
+                        ext = ".tsx"
+                        
+                    matches = searcher.search_tree_sitter_pattern(self.target_repo_path, template_name, ext)
+                    if matches:
+                        structural_findings.append(f"- Occurrences of structural pattern '{template_name}' found via dynamic AST search:")
+                        for m in matches[:10]:
+                            structural_findings.append(f"  * File: {m['file_path']} (Lines {m['start_line']}-{m['end_line']})")
+                            
+        except Exception as e:
+            logger.warning(f"Auto AST search query failed: {e}")
+
+        if structural_findings:
+            context_lines.append("\n## Structural AST Queries")
+            context_lines.extend(structural_findings)
+
         context_lines.append("\n## Structural Relationships")
         for source, target, data in filtered_G.edges(data=True):
             context_lines.append(f"- {source} explicitly {data.get('relation', 'unknown')} {target}")
@@ -357,6 +463,9 @@ class GraphQueryEngine:
         # --- DYNAMIC FILE INJECTION ---
         context_lines.append("\n## Relevant Raw Source Code")
        
+        # Build exact keyword search tokens list for direct checks and scoring
+        tokens = await self._extract_search_tokens_via_llm(user_query)
+
         file_scores = {}
         for node_id, node_data in filtered_G.nodes(data=True):
             file_path = node_data.get("file_path")
@@ -371,12 +480,18 @@ class GraphQueryEngine:
 
             file_path = str(file_path).strip()
             relevance = relevance_scores.get(node_id, 0.0)
-            exact_bonus = 50 if user_query.lower() in str(node_id).lower() else 0
+            
+            # Check if any exact search token is in the node ID or name
+            exact_bonus = 0
+            for tok in tokens:
+                if tok.lower() in str(node_id).lower():
+                    exact_bonus = 50
+                    break
             node_score = relevance + exact_bonus
             file_scores[file_path] = max(file_scores.get(file_path, 0), node_score)
             
         ignore_spec = get_ignore_spec(target_dir)
-        grep_hits = self._exact_match_search(user_query, target_dir, ignore_spec)
+        grep_hits = await self._exact_match_search(user_query, target_dir, ignore_spec)
         
         # 1. Group files and their scores by the query token they matched
         token_to_files = {}
@@ -442,8 +557,15 @@ class GraphQueryEngine:
 
         top_files = selected_files
         logger.info(f"[DIAG] Calculated file_scores: {file_scores}")
-        # --- CRITICAL LOGGING ---
         logger.info(f"Attempting to inject raw code for files: {top_files}")
+
+        # Build file to matched line numbers mapping
+        file_to_matched_lines = {}
+        for tok, paths_dict in grep_hits.items():
+            for rel_path, info in paths_dict.items():
+                matched_lines = file_to_matched_lines.setdefault(rel_path, set())
+                matched_lines.update(info.get("line_numbers", []))
+
         for rel_path in top_files:
             try:
                 full_path = secure_path_join(self.target_repo_path, rel_path)
@@ -451,17 +573,131 @@ class GraphQueryEngine:
                 logger.error(f"Path verification failed for {rel_path}: {e}")
                 continue
 
-            if full_path.exists() and full_path.is_file():
-                try:
-                    code_content = await asyncio.to_thread(full_path.read_text, encoding="utf-8")
-                    # context_lines.append(f"\n### File: {rel_path}\n```python\n{code_content}\n```")
-                    ext = Path(rel_path).suffix.lstrip(".")  # "py", "js", "java", etc.
-                    context_lines.append(f"\n### File: {rel_path}\n```{ext}\n{code_content}\n```")
-                    logger.info(f"SUCCESS: Injected physical file: {full_path}")
-                except Exception as e:
-                    logger.error(f"FAIL: Could not read source file {full_path}: {e}")
-            else:
+            if not (full_path.exists() and full_path.is_file()):
                 logger.error(f"FAIL: File not found on disk at absolute path: {full_path}")
+                continue
+
+            ext = Path(rel_path).suffix.lower()
+            is_source = ext in {'.py', '.js', '.jsx', '.ts', '.tsx', '.go', '.rs', '.c', '.cpp', '.h', '.java', '.kt', '.sh', '.pyw', '.rb', '.pl', '.pm', '.php', '.sql'}
+            file_size = full_path.stat().st_size
+
+            try:
+                # Read the file lines once
+                lines = (await asyncio.to_thread(full_path.read_text, encoding="utf-8")).splitlines()
+            except Exception as e:
+                logger.error(f"FAIL: Could not read source file {full_path}: {e}")
+                continue
+
+            # Check if this is a structured source file with AST nodes in the graph
+            file_ast_nodes = []
+            for node_id, node_data in G.nodes(data=True):
+                if node_data.get("file_path") == rel_path and node_data.get("type") in ["class", "function"]:
+                    file_ast_nodes.append((node_id, node_data))
+
+            # Logic for HTML, JSON, or Flat Files
+            if not is_source or not file_ast_nodes:
+                # Inject fully if it's small (JSON < 5 KB, flat file < 20 KB)
+                if (ext == ".json" and file_size < 5 * 1024) or (is_source and file_size < 20 * 1024):
+                    code_content = "\n".join(lines)
+                    clean_ext = ext.lstrip(".")
+                    context_lines.append(f"\n### File: {rel_path}\n```{clean_ext}\n{code_content}\n```")
+                    logger.info(f"SUCCESS: Injected full flat/config file: {full_path}")
+                else:
+                    # Otherwise, extract matched lines with a context window
+                    matched_lines = file_to_matched_lines.get(rel_path, set())
+                    if not matched_lines:
+                        # Extract first 30 lines as preview
+                        snippet_code = "\n".join(lines[:30])
+                        clean_ext = ext.lstrip(".")
+                        context_lines.append(f"\n### Preview of {rel_path} (First 30 lines)\n```{clean_ext}\n{snippet_code}\n```")
+                        logger.info(f"SUCCESS: Injected snippet preview of {full_path}")
+                    else:
+                        sorted_lines = sorted(list(matched_lines))
+                        chunks = []
+                        curr_chunk = [sorted_lines[0]]
+                        for l in sorted_lines[1:]:
+                            if l - curr_chunk[-1] <= 5:
+                                curr_chunk.append(l)
+                            else:
+                                chunks.append(curr_chunk)
+                                curr_chunk = [l]
+                        chunks.append(curr_chunk)
+
+                        window = 15 if is_source else 5
+                        for chunk in chunks:
+                            start_l = max(1, min(chunk) - window)
+                            end_l = min(len(lines), max(chunk) + window)
+                            snippet_code = "\n".join(lines[start_l - 1:end_l])
+                            clean_ext = ext.lstrip(".")
+                            context_lines.append(f"\n### Code snippet from {rel_path} (Lines {start_l}-{end_l})\n```{clean_ext}\n{snippet_code}\n```")
+                        logger.info(f"SUCCESS: Injected snippets for flat/config file: {full_path}")
+                continue
+
+            # Logic for Structured Source Files: Extract specific AST nodes
+            matched_ast_nodes = set()
+            matched_lines = file_to_matched_lines.get(rel_path, set())
+
+            # Find matching class/function nodes
+            for node_id, node_data in file_ast_nodes:
+                node_name = node_data.get("name", "")
+                if node_name and any(tok.lower() in node_name.lower() for tok in tokens):
+                    matched_ast_nodes.add((node_id, tuple(node_data.items())))
+                    continue
+
+                start = node_data.get("line_start", 0)
+                end = node_data.get("line_end", 0)
+                for line_no in matched_lines:
+                    if start <= line_no <= end:
+                        matched_ast_nodes.add((node_id, tuple(node_data.items())))
+                        break
+
+            # If no node matched specifically (e.g. matched by filename), fetch all AST nodes in this file
+            if not matched_ast_nodes:
+                for node_id, node_data in file_ast_nodes:
+                    matched_ast_nodes.add((node_id, tuple(node_data.items())))
+
+            # Inject the matched AST nodes
+            sorted_nodes = sorted(list(matched_ast_nodes), key=lambda x: dict(x[1]).get("line_start", 0))
+            for node_id, node_tuple in sorted_nodes:
+                node_data = dict(node_tuple)
+                node_type = node_data.get("type", "unknown")
+                start = max(1, node_data.get("line_start", 1))
+                end = min(len(lines), node_data.get("line_end", len(lines)))
+                node_code = "\n".join(lines[start - 1:end])
+                clean_ext = ext.lstrip(".")
+                context_lines.append(f"\n### Code for [{node_type.upper()}] {node_id} (Lines {start}-{end})\n```{clean_ext}\n{node_code}\n```")
+                logger.info(f"SUCCESS: Injected AST node {node_id} from {full_path}")
+
+            # Inject any matching lines at global/module level (not inside any class/function)
+            global_matched_lines = set()
+            for line_no in matched_lines:
+                inside_node = False
+                for node_id, node_data in file_ast_nodes:
+                    if node_data.get("line_start", 0) <= line_no <= node_data.get("line_end", 0):
+                        inside_node = True
+                        break
+                if not inside_node:
+                    global_matched_lines.add(line_no)
+
+            if global_matched_lines:
+                sorted_lines = sorted(list(global_matched_lines))
+                chunks = []
+                curr_chunk = [sorted_lines[0]]
+                for l in sorted_lines[1:]:
+                    if l - curr_chunk[-1] <= 3:
+                        curr_chunk.append(l)
+                    else:
+                        chunks.append(curr_chunk)
+                        curr_chunk = [l]
+                chunks.append(curr_chunk)
+
+                for chunk in chunks:
+                    start_l = max(1, min(chunk) - 5)
+                    end_l = min(len(lines), max(chunk) + 5)
+                    snippet_code = "\n".join(lines[start_l - 1:end_l])
+                    clean_ext = ext.lstrip(".")
+                    context_lines.append(f"\n### Code snippet from {rel_path} (Lines {start_l}-{end_l})\n```{clean_ext}\n{snippet_code}\n```")
+                logger.info(f"SUCCESS: Injected global/module-level snippets for {full_path}")
 
         return "\n".join(context_lines)
     

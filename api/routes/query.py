@@ -3,7 +3,8 @@ import json
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pathlib import Path
-from fastapi.responses import StreamingResponse
+from typing import Optional, Dict, Any
+from pydantic import BaseModel
 
 from core.librarian import Librarian
 from models.query_llm import QueryRequest, NodeChatRequest
@@ -13,6 +14,17 @@ from intelligence_layer.kernel_client import LocalKernelFactory
 from utils.logger import get_logger
 from utils.global_cache import load_graph_cached
 from agents.graph import agent_app
+from core.ast_searcher import ASTSearcher, AST_SEARCH_TEMPLATES
+from core.universal_parser import LANGUAGE_CONFIG
+
+
+class ASTSearchRequest(BaseModel):
+    repo_name: str
+    target_path: str
+    query_type: str  # "graph" or "tree-sitter"
+    filters: Optional[Dict[str, Any]] = None
+    pattern: Optional[str] = None
+    language_ext: Optional[str] = None
 
 
 logger = get_logger()
@@ -284,3 +296,53 @@ async def get_graph_status(repo_name: str):
             "is_complete": False,
             "error": str(e)
         }
+
+
+@router.post("/search")
+async def ast_search(req: ASTSearchRequest):
+    logger.info(f"Received AST search request (type: {req.query_type}) for repo: {req.repo_name}")
+    
+    target_dir = validate_ingestion_path(req.target_path)
+    
+    temp_librarian = Librarian(workspace_root=".", repo_name=req.repo_name)
+    graph_path = Path(temp_librarian.graph_path)
+    
+    graph = None
+    if graph_path.exists():
+        try:
+            graph = await load_graph_cached(graph_path)
+        except Exception as e:
+            logger.warning(f"Could not load cached graph for search: {e}")
+            
+    searcher = ASTSearcher(graph)
+    
+    if req.query_type == "graph":
+        if not req.filters:
+            raise HTTPException(status_code=400, detail="Filters are required for graph structural queries.")
+        try:
+            results = searcher.query_graph_structure(req.filters)
+            return {"status": "success", "results": results}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+            
+    elif req.query_type == "tree-sitter":
+        if not req.pattern or not req.language_ext:
+            raise HTTPException(status_code=400, detail="Pattern and language_ext are required for tree-sitter queries.")
+            
+        query_str = req.pattern
+        lang_key = ""
+        if req.language_ext in LANGUAGE_CONFIG:
+            lang_key = LANGUAGE_CONFIG[req.language_ext].get("type", "")
+            
+        if lang_key and lang_key in AST_SEARCH_TEMPLATES:
+            if req.pattern in AST_SEARCH_TEMPLATES[lang_key]:
+                query_str = AST_SEARCH_TEMPLATES[lang_key][req.pattern]
+                
+        try:
+            results = searcher.search_tree_sitter_pattern(str(target_dir), query_str, req.language_ext)
+            return {"status": "success", "results": results}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+            
+    else:
+        raise HTTPException(status_code=400, detail="Invalid query_type. Must be 'graph' or 'tree-sitter'.")

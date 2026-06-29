@@ -115,7 +115,7 @@ class Librarian:
             current_hash = self.calculate_file_hash(full_path)
             
             # Check separate extraction cache
-            cache_file = cache_dir / f"{current_hash}.json"
+            cache_file = cache_dir / f"v4_{current_hash}.json"
             if cache_file.exists():
                 status = "unchanged"
                 self.load_from_cache(cache_file)
@@ -174,7 +174,7 @@ class Librarian:
         workspace_root = self.storage_dir.parent.parent.parent
         cache_dir = workspace_root / ".localgraph" / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_file = cache_dir / f"{file_hash}.json"
+        cache_file = cache_dir / f"v4_{file_hash}.json"
         
         file_node_id = f"file::{relative_path}"
         nodes_to_cache = []

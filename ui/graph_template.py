@@ -187,7 +187,7 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         }
         return {
             id: n.id, label: n.label, size: n.size, font: n.font, title: n.title, shape: n.shape,
-            group: n.group, 
+            // group: n.group, 
             _community: n.community, _community_name: n.community_name, _file_type: n._file_type,
             _is_pending: n._is_pending,
             color: n._is_pending ? { background: bg, border: '#F28E2B' } : { background: bg, border: bd },
@@ -197,9 +197,15 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     }));
 
     const edgesDS = new vis.DataSet(RAW_EDGES.map((e, i) => ({
-        id: i, from: e.from, to: e.to, label: e.label,
-        width: e.width || 0.4, color: e.color || '#4a5568',
-        arrows: { to: { enabled: true, scaleFactor: 1 } },
+        id: i,
+        from: e.from,
+        to: e.to,
+        label: e.label,
+        title: e.title,
+        width: e.width || 0.4,
+        color: e.color || '#4a5568',
+        dashes: e.dashes || false,
+        arrows: e.arrows || { to: { enabled: true, scaleFactor: 1 } }
     })));
 
     const container = document.getElementById('graph');
@@ -279,7 +285,6 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
             network.fit({ animation: { duration: 1000, easingFunction: 'easeInOutQuad' } });
         }
     }
-    network.on('deselectNode', deselectNode);
 
     // --- BULLETPROOF 3D ENGINE ---
     let Graph3D = null;
@@ -291,19 +296,88 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         if (!Graph3D) {
             const w = document.body.clientWidth - 280;
             const h = document.body.clientHeight;
-            Graph3D = ForceGraph3D()(container3D)
+            container3D.addEventListener('contextmenu', event => event.preventDefault());
+
+            Graph3D = ForceGraph3D({
+                controlType: 'orbit',
+                rendererConfig: {
+                    antialias: false,
+                    powerPreference: "high-performance",
+                    precision: "mediump"
+                }
+            })(container3D)
                 .width(w)
                 .height(h)
                 .backgroundColor('#0f0f1a')
-                .nodeLabel(node => `<div style="background: rgba(15,15,26,0.9); padding: 6px 10px; border: 1px solid #3a3a5e; border-radius: 4px; color: #e0e0e0; font-size: 12px; font-family: sans-serif;">${esc(node.name)}</div>`)
+                .nodeResolution(6)
+                .linkResolution(4)
+                // ── RESTORED visuals ──────────────────────────────────
+                .linkDirectionalParticles(1)
+                .linkDirectionalParticleSpeed(0.006)
+                .linkDirectionalParticleWidth(1.0)
+                .linkCurvature(0.12)
+                .linkWidth(0.6)
+                // ─────────────────────────────────────────────────────
+                .nodeLabel(node => `<div style="background:rgba(15,15,26,0.9);padding:6px 10px;border:1px solid #3a3a5e;border-radius:4px;color:#e0e0e0;font-size:12px;font-family:sans-serif;">${esc(node.name)}</div>`)
                 .nodeColor('color')
-                .nodeVal('val') 
-                .linkWidth(0.5)
+                .nodeVal('val')
                 .linkColor(link => link.color || '#3a3a5e')
-                .onNodeClick(node => focusNode(node.id))
-                .onBackgroundClick(deselectNode); 
-                
-            // THE PHANTOM FIX: Strict Set of mathematically valid Node IDs
+                // ── THE ACTUAL FIX ────────────────────────────────────
+                // After simulation converges, stop the render loop entirely.
+                // GPU usage drops to ~0. Resume on any interaction.
+                .onEngineStop(() => {
+                    Graph3D.pauseAnimation();
+
+                    if (currentSelectedNode) {
+                        const n3d = Graph3D.graphData().nodes.find(
+                            node => String(node.id) === String(currentSelectedNode)
+                        );
+                        if (n3d && n3d.x !== undefined && !Number.isNaN(n3d.x)) {
+                            const distance = 120;
+                            const hypo = Math.hypot(n3d.x, n3d.y, n3d.z);
+                            let camPos = { x: n3d.x, y: n3d.y, z: n3d.z + distance };
+                            if (hypo > 0.1) {
+                                const r = 1 + distance / hypo;
+                                camPos = { x: n3d.x * r, y: n3d.y * r, z: n3d.z * r };
+                            }
+                            // resumeAnimation for the camera flight, then pause again
+                            Graph3D.resumeAnimation();
+                            Graph3D.cameraPosition(camPos, n3d, 1500);
+                            setTimeout(() => Graph3D.pauseAnimation(), 8000);
+                        }
+                    } else {
+                        Graph3D.resumeAnimation();
+                        Graph3D.zoomToFit(1000, 50);
+                        setTimeout(() => Graph3D.pauseAnimation(), 8000);
+                    }
+                })
+                .onNodeClick(node => {
+                    Graph3D.resumeAnimation();
+                    focusNode(node.id);
+                })
+                .onBackgroundClick(() => {
+                    Graph3D.resumeAnimation();
+                    deselectNode();
+                });
+
+            // Resume on orbit controls (mouse drag/scroll on the 3D canvas)
+            // 3d-force-graph exposes the underlying three.js renderer controls
+            container3D.addEventListener('mousedown', () => {
+                if (Graph3D) Graph3D.resumeAnimation();
+            });
+            container3D.addEventListener('wheel', () => {
+                if (Graph3D) Graph3D.resumeAnimation();
+            }, { passive: true });
+
+            // Pause again after orbit interaction ends
+            let orbitPauseTimer = null;
+            container3D.addEventListener('mouseup', () => {
+                clearTimeout(orbitPauseTimer);
+                orbitPauseTimer = setTimeout(() => {
+                    if (Graph3D) Graph3D.pauseAnimation();
+                }, 4000); // 4 seconds after releasing mouse — enough for inertia to settle
+            });
+
             const validNodeIds = new Set(RAW_NODES.map(n => String(n.id)));
 
             const nodes3D = RAW_NODES.map(n => {
@@ -313,14 +387,13 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
                     else if (n.color.background) c = n.color.background;
                 }
                 return {
-                    id: String(n.id), 
+                    id: String(n.id),
                     name: n.label,
                     color: c,
-                    val: Math.max(1, (n.size || 15) / 3) // Prevent massive blobs
+                    val: Math.max(1, (n.size || 15) / 3)
                 };
             });
-            
-            // THE PHANTOM FIX: Aggressively destroy orphaned edges before 3D rendering
+
             const links3D = RAW_EDGES
                 .filter(e => validNodeIds.has(String(e.from)) && validNodeIds.has(String(e.to)))
                 .map(e => ({
@@ -328,7 +401,7 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
                     target: String(e.to),
                     color: e.color
                 }));
-            
+
             Graph3D.graphData({ nodes: nodes3D, links: links3D });
         }
     }
@@ -523,6 +596,8 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     network.on('select', params => {
         if (params.nodes.length > 0) {
             focusNode(params.nodes[0]);
+        } else {
+            deselectNode();
         }
     });
 
