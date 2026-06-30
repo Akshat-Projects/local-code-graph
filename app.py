@@ -1,3 +1,8 @@
+"""
+Provides a fully-featured Streamlit UI frontend for LocalGraph AI, enabling repository 
+ingestion configuration, interactive vis.js graph visualization, and streaming chatbot queries.
+"""
+
 import streamlit.components.v1 as components
 import json
 import requests

@@ -1,3 +1,8 @@
+"""
+Provides in-memory caching for loading NetworkX GraphML codebase databases,
+checking file modification times (mtime) to avoid redundant filesystem reads.
+"""
+
 import os
 import asyncio
 import networkx as nx

@@ -1,3 +1,8 @@
+"""
+Orchestrates Phase 1 codebase synchronizations, traversing repositories to detect,
+parse, and map file additions or updates to structural AST representations.
+"""
+
 from core.librarian import Librarian
 from core.ast_parser import CodebaseASTParser
 from core.universal_parser import UniversalParser

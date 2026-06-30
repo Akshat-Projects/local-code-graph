@@ -1,3 +1,8 @@
+"""
+Defines query and component chat endpoints for querying the code graph, 
+streaming local LLM responses, and invoking on-the-fly AST structural searches.
+"""
+
 import re
 import json
 from fastapi import APIRouter, HTTPException
@@ -5,10 +10,12 @@ from fastapi.responses import StreamingResponse
 from pathlib import Path
 from typing import Optional, Dict, Any
 from pydantic import BaseModel
+from semantic_kernel.functions import KernelArguments
 
 from core.librarian import Librarian
-from models.query_llm import QueryRequest, NodeChatRequest
+from models.query_llm import QueryRequest, NodeChatRequest, ASTSearchRequest
 from utils.helper import validate_ingestion_path, secure_path_join
+from intelligence_layer.prompts import COMPONENT_CHAT_PROMPT
 from intelligence_layer.query_engine import GraphQueryEngine
 from intelligence_layer.kernel_client import LocalKernelFactory
 from utils.logger import get_logger
@@ -18,13 +25,13 @@ from core.ast_searcher import ASTSearcher, AST_SEARCH_TEMPLATES
 from core.universal_parser import LANGUAGE_CONFIG
 
 
-class ASTSearchRequest(BaseModel):
-    repo_name: str
-    target_path: str
-    query_type: str  # "graph" or "tree-sitter"
-    filters: Optional[Dict[str, Any]] = None
-    pattern: Optional[str] = None
-    language_ext: Optional[str] = None
+# class ASTSearchRequest(BaseModel):
+#     repo_name: str
+#     target_path: str
+#     query_type: str  # "graph" or "tree-sitter"
+#     filters: Optional[Dict[str, Any]] = None
+#     pattern: Optional[str] = None
+#     language_ext: Optional[str] = None
 
 
 logger = get_logger()
@@ -128,7 +135,7 @@ async def ask_codebase(request: QueryRequest):
                             yield json.dumps({"type": "telemetry", **payload}) + "\n"
                                     
         except Exception as e:
-            logger.error(f"LangGraph Streaming Error: {e}")
+            logger.error(f"LangGraph Streaming Error: {e}", exc_info=True)
             # Ensure errors are safely JSON formatted so they don't crash app.py
             yield json.dumps({"type": "error", "content": f"Generation failed midway: {str(e)}"}) + "\n"
 
@@ -141,40 +148,7 @@ async def ask_codebase(request: QueryRequest):
     except Exception as e:
         logger.error(f"Failed to process query: {e}")
         raise HTTPException(status_code=500, detail="Internal agent execution error.")
-# @router.post("")
-# async def ask_codebase(request: QueryRequest):
-#     """
-#     Submits a natural language question and streams the answer back.
-#     """
-#     logger.info(f"Received streaming query for repo: {request.repo_name}")
-#     logger.info(f"Received Chat History Length: {len(request.chat_history)} characters") 
-    
-#     target_dir = validate_ingestion_path(
-#             request.target_path
-#         )
-#     try:
-#         engine = GraphQueryEngine(
-#             # target_repo_path=request.target_path,
-#             repo_name=request.repo_name,
-#             target_repo_path=str(target_dir),
-#             )
-        
-#         # Grab the async generator
-#         response_generator = engine.answer_question_stream(
-#             user_query=request.question, 
-#             max_tokens=request.max_tokens,
-#             chat_history=request.chat_history
-#             )
-        
-#         # Stream the chunks down the HTTP connection as plain text
-#         return StreamingResponse(response_generator, media_type="text/plain")
-        
-#     except FileNotFoundError as e:
-#         raise HTTPException(status_code=404, detail=str(e))
-#     except Exception as e:
-#         logger.error(f"Failed to process query: {e}")
-#         raise HTTPException(status_code=500, detail="Internal inference error.")
-    
+
     
 @router.post("/node/{repo_name}")
 async def chat_with_node(repo_name: str, req: NodeChatRequest):
@@ -220,25 +194,20 @@ async def chat_with_node(repo_name: str, req: NodeChatRequest):
             raise he
         except Exception as e:
             logger.warning(f"Could not read live code for {req.node_id}: {e}")
+    
     # 3. The Real LLM Integration
-    prompt = f"""
-    You are an expert software architect analyzing a specific codebase component.
-    
-    Component Name: {req.node_id}
-    Component Type: {node_type}
-    Component Summary: {summary}
-    Relevant Code: {raw_code}
-    
-    The user has a question specifically about this component:
-    "{req.question}"
-    
-    Provide a clear, concise, and highly technical answer based ONLY on the context provided above.
-    """
     kernel = LocalKernelFactory.create_kernel()
+    arguments = KernelArguments(
+        node_id=req.node_id,
+        node_type=node_type,
+        summary=summary,
+        raw_code=raw_code,
+        question=req.question
+    )
     # --- Asynchronous Generator for Streaming ---
     async def generate():
         try:
-            async for chunk in kernel.invoke_prompt_stream(prompt):
+            async for chunk in kernel.invoke_prompt_stream(prompt=COMPONENT_CHAT_PROMPT, arguments=arguments):
                 # The 'chunk' object is a list of StreamingChatMessageContent
                 for message_content in chunk:
                     # Iterate through the items in the message

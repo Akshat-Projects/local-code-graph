@@ -1,3 +1,8 @@
+"""
+Manages the graph database state (saving/loading GraphML) and scans directories,
+tracking modified files using MD5 hashes to optimize downstream parsing.
+"""
+
 import os
 import hashlib
 import re
@@ -47,6 +52,7 @@ class Librarian:
         self.graph_path = (self.storage_dir / "graph.graphml")
         self.graph = self._load_or_create_graph()
 
+
     def _load_or_create_graph(self) -> nx.MultiDiGraph:
         """Loads an existing GraphML file or initializes a fresh MultiDiGraph."""
         if os.path.exists(self.graph_path):
@@ -57,6 +63,7 @@ class Librarian:
             except Exception as e:
                 logger.warning(f"Warning: Failed to read existing graph layout ({e}). Initializing fresh.")
         return nx.MultiDiGraph()
+
 
     def save_graph(self, G: nx.MultiDiGraph = None):
         """Saves the graph using an atomic write to prevent UI read-crashes."""
@@ -76,6 +83,7 @@ class Librarian:
         except Exception as e:
             logger.error(f"Failed to save graph atomically: {e}")
 
+
     @staticmethod
     def calculate_file_hash(absolute_path: str) -> str:
         """Computes the SHA-256 hash of a file to check for structural changes."""
@@ -88,6 +96,7 @@ class Librarian:
         except Exception as e:
             logger.error(f"Error hashing file {absolute_path}: {e}")
             return ""
+
 
     def scan_repository(self, target_repo_path: str, valid_files: list[Path] = None) -> dict:
         """
@@ -130,6 +139,7 @@ class Librarian:
                 
         return file_manifest
 
+
     def load_from_cache(self, cache_file_path: Path):
         import json
         try:
@@ -166,6 +176,7 @@ class Librarian:
             logger.info(f"Loaded cached structure from {cache_file_path}")
         except Exception as e:
             logger.error(f"Failed to load cache from {cache_file_path}: {e}")
+
 
     def write_to_cache(self, relative_path: str, file_hash: str):
         import json

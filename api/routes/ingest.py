@@ -1,9 +1,14 @@
+"""
+Defines FastAPI routes for repository ingestion, background processing job polling,
+topography generation via Leiden community clustering, and graph serialization for UI maps.
+"""
+
 import os
 import uuid
 import re
 import asyncio
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from typing import Any, Dict
+from typing import Any, Dict, List, Set
 from pathlib import Path
 import networkx as nx
 import textwrap
@@ -32,6 +37,10 @@ JOB_STORE: Dict[str, Dict[str, Any]] = {}
 
 
 def assign_communities(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
+    """
+    Computes modular hierarchical communities using the Leiden algorithm
+    and updates the graph metadata structure.
+    """
     # Convert networkx → igraph
     undirected_g = G.to_undirected()
     ig_graph = ig.Graph.from_networkx(undirected_g)
@@ -79,26 +88,14 @@ def assign_communities(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
     return G
 
 
-async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str, target_path: str):
-    """The background worker that updates the global JOB_STORE dictionary."""
-    JOB_STORE[job_id] = {"status": "processing", "details": {}}
-    logger.info(f"Job {job_id} started processing for repo: {repo_name}")
-
-    target_dir = Path(target_path)
-    ignore_spec = get_ignore_spec(target_dir)
-    
-    # 1. Build the filtered list
+def _gather_valid_files(target_dir: Path, ignore_spec) -> List[Path]:
+    """Helper to traverse the target directory and collect all files not matched by the ignore spec."""
     valid_files = []
-    
     for file_path in target_dir.rglob("*"):
-
         if not file_path.is_file():
             continue
 
-        relative_path = str(
-            file_path.relative_to(target_dir)
-        )
-
+        relative_path = str(file_path.relative_to(target_dir))
         if ignore_spec.match_file(relative_path):
             continue
 
@@ -106,50 +103,115 @@ async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str
 
         if len(valid_files) > SecurityConstraints.MAX_FILES:
             raise ValueError(
-                f"Repository exceeds "
-                f"maximum allowed file count "
-                f"({SecurityConstraints.MAX_FILES})"
+                f"Repository exceeds maximum allowed file count ({SecurityConstraints.MAX_FILES})"
             )
+    return valid_files
+
+
+def _execute_ast_parsing(librarian: Librarian, target_path: str, valid_files: List[Path]) -> Set[str]:
+    """Helper to execute the static AST parsing of files in a background worker thread."""
+    manifest = librarian.scan_repository(target_path, valid_files=valid_files)
+    parser = UniversalParser(librarian.graph)
+    modified_files = set()
+    
+    for rel_path, file_meta in manifest.items():
+        if file_meta["status"] == "modified":
+            modified_files.add(rel_path)
+            parser.parse_file(file_meta["absolute_path"], rel_path, file_meta["hash"])
+            
+    # Resolve static import and call linkages across all parsed files
+    parser.resolve_all_calls()
+            
+    # Prune external library calls from the graph
+    logger.info("Pruning external library calls from the graph...")
+    real_names = set()
+    for node_id, data in librarian.graph.nodes(data=True):
+        if data.get("type") in ["file", "class", "function"]:
+            exact_name = str(node_id).split("::")[-1]
+            real_names.add(exact_name)
+            if data.get("type") == "file":
+                real_names.add(exact_name.replace(".py", ""))
+
+    nodes_to_remove = [
+        n for n, d in librarian.graph.nodes(data=True) 
+        if str(n).startswith("fuzzy::") and str(n).replace("fuzzy::", "") not in real_names
+    ]
+    for n in nodes_to_remove:
+        librarian.graph.remove_node(n)
+    logger.info(f"Removed {len(nodes_to_remove)} external/unresolved fuzzy calls.")
+    librarian.save_graph()
+    
+    return modified_files
+
+
+async def _execute_llm_analysis(
+    req: IngestRequest, 
+    librarian: Librarian, 
+    target_path: str, 
+    modified_files: Set[str], 
+    job_id: str, 
+    update_ui_progress
+) -> None:
+    """Helper to trigger the LLM Semantic Analysis (Phase 2) on code files."""
+    if req.run_llm:
+        update_progress(current=50, total=100, status_message="Running Deep LLM Analysis....", job_id=job_id)
+        analyst = GraphAnalyst(
+            librarian=librarian, 
+            target_repo_path=target_path,
+            modified_files=modified_files
+        )
+        await analyst.analyze_and_update(progress_callback=update_ui_progress)
+    else:
+        update_progress(current=80, total=100, status_message="Skipping LLM Ingestion...", job_id=job_id)
+
+
+async def _calculate_topography(librarian: Librarian, update_ui_progress) -> None:
+    """Helper to run the Leiden community detection algorithms to cluster graph topology."""
+    logger.info("Assigning Leiden communities for visualization...")
+    update_ui_progress(current=85, total=100, status_message="Calculating Graph Topography...")
+    try:
+        librarian.graph = await asyncio.to_thread(assign_communities, librarian.graph)
+        await asyncio.to_thread(librarian.save_graph)
+        logger.info("Community assignment complete.")
+    except Exception as e:
+        logger.warning(f"Community clustering failed, continuing without it: {e}")
+
+
+async def _build_vector_indexes(librarian: Librarian, repo_name: str, update_ui_progress) -> None:
+    """Helper to compile and build the FAISS/BM25 vector indexes."""
+    logger.info("Building Hybrid FAISS/BM25 Indexes...")
+    update_ui_progress(current=95, total=100, status_message="Building FAISS Vector Indexes...")
+    
+    nodes_data = []
+    for node_id, data in librarian.graph.nodes(data=True):
+        summary = data.get("summary", "")
+        if summary and summary not in ["No summary available.", "pending"]:
+            nodes_data.append({"node_id": str(node_id), "summary": summary})
+            
+    if nodes_data:
+        vector_store = HybridVectorStore(repo_name)
+        await asyncio.to_thread(vector_store.build_indexes, nodes_data)
+        logger.info("Hybrid indexing complete.")
+    else:
+        logger.warning("No valid summaries found to index.")
+
+
+async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str, target_path: str):
+    """The background worker that orchestrates file parsing, LLM analysis, community detection, and vector indexing."""
+    JOB_STORE[job_id] = {"status": "processing", "details": {}}
+    logger.info(f"Job {job_id} started processing for repo: {repo_name}")
+
+    target_dir = Path(target_path)
+    ignore_spec = get_ignore_spec(target_dir)
     
     try:
-        # Phase 1: Static AST Parsing
-        librarian = Librarian(workspace_root=".", repo_name=repo_name)
+        # 1. Gather all files in scope
+        valid_files = _gather_valid_files(target_dir, ignore_spec)
         
-        # --- CONNECTION: Run Phase 1 entirely in a thread to keep FastAPI responsive ---
-        def run_phase_1():
-            manifest = librarian.scan_repository(target_path, valid_files=valid_files)
-            parser = UniversalParser(librarian.graph)
-            modified_files = set()
-            for rel_path, file_meta in manifest.items():
-                if file_meta["status"] == "modified":
-                    modified_files.add(rel_path)
-                    parser.parse_file(file_meta["absolute_path"], rel_path, file_meta["hash"])
-                    
-            # Pass 2: Resolve static import and call linkages across all parsed files
-            parser.resolve_all_calls()
-                    
-            # --- ORPHAN PRUNING ---
-            logger.info("Pruning external library calls from the graph...")
-            real_names = set()
-            for node_id, data in librarian.graph.nodes(data=True):
-                if data.get("type") in ["file", "class", "function"]:
-                    exact_name = str(node_id).split("::")[-1]
-                    real_names.add(exact_name)
-                    if data.get("type") == "file":
-                        real_names.add(exact_name.replace(".py", ""))
-
-            nodes_to_remove = [
-                n for n, d in librarian.graph.nodes(data=True) 
-                if str(n).startswith("fuzzy::") and str(n).replace("fuzzy::", "") not in real_names
-            ]
-            for n in nodes_to_remove:
-                librarian.graph.remove_node(n)
-            logger.info(f"Removed {len(nodes_to_remove)} external/unresolved fuzzy calls.")
-            librarian.save_graph()
-            return manifest, modified_files
-
-        manifest, modified_files = await asyncio.to_thread(run_phase_1)
-            
+        # 2. Phase 1: Static AST Parsing
+        librarian = Librarian(workspace_root=".", repo_name=repo_name)
+        modified_files = await asyncio.to_thread(_execute_ast_parsing, librarian, target_path, valid_files)
+        
         # --- UI CONNECTION: The Streamlit Progress Callback ---
         def update_ui_progress(current: int, total: int, status_message: str):
             JOB_STORE[job_id]["details"] = {
@@ -159,68 +221,32 @@ async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str
                 "current_file": status_message
             }
             
-        # Phase 2: LLM Semantic Analysis
-        if req.run_llm:
-            update_progress(current=50, total=100, status_message="Running Deep LLM Analysis....", job_id=job_id)
-            
-
-            analyst = GraphAnalyst(
-                librarian=librarian, 
-                target_repo_path=target_path,
-                modified_files=modified_files)
-            # Pass the callback so the backend can talk to the Streamlit UI!
-            await analyst.analyze_and_update(progress_callback=update_ui_progress)
-        else:
-            update_progress(current=80, total=100, status_message="Skipping LLM Ingestion...", job_id=job_id)
-            
-        logger.info("Assigning Leiden communities for visualization...")
-        update_ui_progress(current=85, total=100, status_message="Calculating Graph Topography...")
+        # 3. Phase 2: LLM semantic parsing
+        await _execute_llm_analysis(req, librarian, target_path, modified_files, job_id, update_ui_progress)
         
-        try:
-            librarian.graph = await asyncio.to_thread(assign_communities, librarian.graph)
-            await asyncio.to_thread(librarian.save_graph) # Persist the community data to disk
-            logger.info("Community assignment complete.")
-        except Exception as e:
-            logger.warning(f"Community clustering failed, continuing without it: {e}")
-        # ==========================================
-        # --- POPULATE THE DUAL-INDEX STORE ---
-        # ==========================================
+        # 4. Phase 3: Community topological calculations
+        await _calculate_topography(librarian, update_ui_progress)
         
-        logger.info("Building Hybrid FAISS/BM25 Indexes...")
-        update_ui_progress(current=95, total=100, status_message="Building FAISS Vector Indexes...")
+        # 5. Phase 4: Vector index builds
+        await _build_vector_indexes(librarian, repo_name, update_ui_progress)
         
-        nodes_data = []
-        for node_id, data in librarian.graph.nodes(data=True):
-            summary = data.get("summary", "")
-            # Only index nodes that actually have valid text
-            if summary and summary not in ["No summary available.", "pending"]:
-                nodes_data.append({"node_id": str(node_id), "summary": summary})
-                
-        if nodes_data:
-            vector_store = HybridVectorStore(repo_name)
-            await asyncio.to_thread(vector_store.build_indexes, nodes_data)
-            logger.info("Hybrid indexing complete.")
-        else:
-            logger.warning("No valid summaries found to index.")     
-            
-               
-        # Mark Job as Successful
+        # Ingestion Success status
         JOB_STORE[job_id] = {
             "status": "completed",
             "message": "Graph enriched and saved successfully.",
             "details": {"files_modified": len(modified_files), "progress_percent": 100}
         }
         logger.info(f"Job {job_id} completed successfully.")
-            
-            
+        
     except Exception as e:
-        # Mark Job as Failed and capture the exact error!
         error_msg = str(e)
         JOB_STORE[job_id] = {
             "status": "failed",
-            "message": f"Pipeline failed: {error_msg}"
+            "message": f"Pipeline failed: {error_msg}",
+            "details": {"error": error_msg}
         }
         logger.error(f"Job {job_id} failed: {error_msg}", exc_info=True)
+        raise
 
 
 @router.post("", status_code=202, response_model=JobStatusResponse)
@@ -251,6 +277,7 @@ async def trigger_ingestion(request: IngestRequest, background_tasks: Background
         message="Ingestion queued in the background."
     )
 
+
 @router.get("/status/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(job_id: str):
     """
@@ -267,6 +294,8 @@ async def get_job_status(job_id: str):
         message=job_data.get("message"),
         details=job_data.get("details")
     )
+
+    
 @router.get("/visualize/{repo_name}")
 async def get_graph_visualization(
     repo_name: str,

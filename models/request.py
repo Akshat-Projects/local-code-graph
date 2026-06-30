@@ -1,3 +1,8 @@
+"""
+Defines request and response schemas for FastAPI endpoints, validating parameters
+like repository names, query strings, and processing job tracking identifiers.
+"""
+
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Annotated
 

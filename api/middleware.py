@@ -1,3 +1,7 @@
+"""
+Middleware for regulating all connections following security protocols for FastAPI backend.
+"""
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import settings

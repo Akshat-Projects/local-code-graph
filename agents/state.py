@@ -1,3 +1,8 @@
+"""
+Defines the GraphRAGState whiteboard schema, including type annotations and reducers
+for state accumulation across agents (e.g. accumulating structural context lists).
+"""
+
 from typing import TypedDict, Annotated, List
 import operator
 

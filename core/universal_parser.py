@@ -1,3 +1,8 @@
+"""
+Parses target codebase source files (Python, Javascript, TypeScript, C++, etc.) using Tree-sitter AST,
+extracting function definitions, class structural nodes, imports, and caller linkages.
+"""
+
 import networkx as nx
 from pathlib import Path
 import json
@@ -348,6 +353,7 @@ class UniversalParser:
             
         return import_map
 
+
     def parse_file(self, absolute_path: str, relative_path: str, file_hash: str):
         ext = Path(absolute_path).suffix
         file_ext = Path(absolute_path).suffix.lower()
@@ -601,29 +607,7 @@ class UniversalParser:
                         f"(lang={lang_type}): {e}"
                     )
         
-        # for node, capture_name in captures:
-        #     # Safely get the name using bytes
-        #     node_name = source_bytes[node.start_byte:node.end_byte].decode('utf8')
-        #     start_line = node.start_point[0] + 1
-        #     end_line = node.end_point[0] + 1
-
-        #     if capture_name == "class":
-        #         class_id = f"{relative_path}::{node_name}"
-        #         self._register_class(class_id, node_name, relative_path, file_node_id, start_line, end_line)
-        #         classes[node_name] = {"id": class_id, "ts_node": node.parent} 
-                
-        #     elif capture_name == "function":
-        #         # Determine if this function is inside a class we already found
-        #         parent_class_id = None
-        #         for cls_name, cls_data in classes.items():
-        #             # If the function's AST node is a child of the class's AST node, it's a method!
-        #             if self._is_descendant(node, cls_data["ts_node"]):
-        #                 parent_class_id = cls_data["id"]
-        #                 break
-                
-        #         func_id = f"{parent_class_id}::{node_name}" if parent_class_id else f"{relative_path}::{node_name}"
-        #         self._register_function(func_id, node_name, relative_path, file_node_id, parent_class_id, start_line, end_line)
-
+       
     
     def _find_enclosing_scope(
         self,

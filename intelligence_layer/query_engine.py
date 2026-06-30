@@ -1,3 +1,10 @@
+"""
+What this code does:
+Orchestrates semantic, structural, and exact keyword searches across the code graph database,
+determines the routing intent, builds context payloads for local LLM consumption, 
+and streams final synthesized responses with telemetry.
+"""
+
 import os
 import asyncio
 import re
@@ -10,7 +17,7 @@ from pathlib import Path
 from tenacity import retry, wait_exponential, stop_after_attempt
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatPromptExecutionSettings
 
-from config import settings
+from utils.constants import AllowedTypes
 from utils.logger import get_logger
 from utils.helper import timeit, validate_ingestion_path, secure_path_join
 from intelligence_layer.kernel_client import LocalKernelFactory
@@ -18,7 +25,13 @@ from core.vector_operations import HybridVectorStore
 from intelligence_layer.kernel_client import CodebaseSearchPlugin
 from utils.global_cache import load_graph_cached
 from utils.helper import get_ignore_spec
-from intelligence_layer.prompts import GRAPH_RAG_PROMPT, AGENT_PROMPT, KEYWORD_EXTRACTION_PROMPT
+from intelligence_layer.prompts import (
+    GRAPH_RAG_PROMPT, 
+    AGENT_PROMPT, 
+    KEYWORD_EXTRACTION_PROMPT,
+    ROUTER_PROMPT,
+    CONSOLIDATION_PROMPT
+)
 
 logger = get_logger()
 
@@ -91,6 +104,10 @@ def score_line_match(line: str, matched_word: str, file_path: str) -> float:
 
 
 class GraphQueryEngine:
+    """
+    The main Graph query engine that loads graph data, determines user intent,
+    routes the query, extracts modular code context, and interfaces with the LLM.
+    """
     def __init__(self, repo_name: str, target_repo_path: str):
         self.repo_name = repo_name
         self.graph_path = f".localgraph/storage/{repo_name}/graph.graphml"
@@ -105,6 +122,7 @@ class GraphQueryEngine:
    
    
     async def _extract_search_tokens_via_llm(self, query: str) -> list[str]:
+        """Uses a lightweight LLM keyword analyzer to extract code symbols from natural queries."""
         try:
             res = await self.kernel.invoke_prompt(
                 prompt=KEYWORD_EXTRACTION_PROMPT,
@@ -128,6 +146,13 @@ class GraphQueryEngine:
                 extracted = [str(t).strip() for t in tokens if t]
                 logger.info(f"LLM Extracted Search Tokens: {extracted}")
                 return extracted
+            elif isinstance(tokens, dict):
+                for val in tokens.values():
+                    if isinstance(val, list):
+                        extracted = [str(t).strip() for t in val if t]
+                        logger.info(f"LLM Extracted Search Tokens (from dict): {extracted}")
+                        return extracted
+            return []
         except Exception as e:
             logger.warning(f"LLM keyword extraction failed: {e}. Falling back to rule-based.")
         return []
@@ -147,37 +172,7 @@ class GraphQueryEngine:
         Language-agnostic: operates on raw file bytes regardless of language.
         """
         # Common English stop words to filter out from natural language queries
-        stopwords = {
-            "why", "is", "my", "chatbot", "not", "find", "any", "mentions", "of", 
-            "despite", "me", "adding", "regex", "search", "in", "whole", "code", 
-            "base", "can", "you", "see", "where", "the", "does", "do", "how", "what", 
-            "which", "who", "whom", "this", "that", "these", "those", "am", "are", 
-            "was", "were", "be", "been", "being", "have", "has", "had", "having", 
-            "a", "an", "and", "but", "if", "or", "because", "as", "until", "while", 
-            "at", "by", "for", "with", "about", "against", "between", "into", "through", 
-            "during", "before", "after", "above", "below", "to", "from", "up", "down", 
-            "on", "off", "over", "under", "again", "further", "then", "once", "here", 
-            "there", "when", "all", "both", "each", "few", "more", "most", "other", 
-            "some", "such", "no", "nor", "only", "own", "same", "so", "than", "too", 
-            "very", "will", "just", "should", "now", "us", "use", "used", "using",
-            "tell", "give", "code", "related", "write", "show", "get", "find", "make", 
-            "explain", "describe", "detail", "summary", "list", "check", "verify", 
-            "run", "execute", "test", "implementation", "implement", "add", "change", 
-            "create", "delete", "remove", "update", "modify", "patch", "fix", "bug", 
-            "issue", "error", "exception", "crash", "fail", "failure", "success", 
-            "work", "can", "could", "should", "would", "must", "may", "might", "shall", 
-            "please", "thanks", "thank", "hello", "hi", "hey", "dear", "sir", "madam", 
-            "ai", "assistant", "bot", "chat", "chatbot", "history", "message", "query", 
-            "question", "input", "output", "result", "response", "answer", "context", 
-            "payload", "file", "folder", "directory", "repo", "repository", "workspace", 
-            "codebase", "project", "source", "structure", "snippet", "snippets",
-            "about", "also", "some", "someone", "something", "somewhere", "anyone",
-            "anything", "anywhere", "noone", "nothing", "nowhere", "everyone", 
-            "everything", "everywhere", "more", "most", "less", "least", "few", 
-            "many", "several", "much", "little", "own", "other", "another", "such",
-            "different", "similar", "like", "as", "than", "too", "very", "quite", 
-            "rather", "somewhat", "highly", "extremely", "really"
-        }
+        stopwords = AllowedTypes.STOP_WORDS
 
         # First, try to extract keywords via LLM agent (Option B)
         tokens = await self._extract_search_tokens_via_llm(query)
@@ -307,20 +302,16 @@ class GraphQueryEngine:
         return results
         
     async def _get_relevant_subgraph(self, G: nx.Graph, query: str, chat_history: str = "", top_k: int = 15) -> tuple[nx.Graph, dict]:
+        """Calculates PageRank score distributions and extracts a relevant semantic subgraph."""
         search_query = query
         if chat_history:
             try:
                 # Use LLM to consolidate query with history in a single short sentence
-                consolidation_prompt = f"""Given the following conversation history and a follow-up query, rewrite the follow-up query to be a standalone search query that contains all necessary context (like class/function/variable names, topics, or terms referred to by pronouns). Do not answer the query, just rewrite it.
-                
-                Conversation History:
-                {chat_history}
-                
-                Follow-up Query: {query}
-                
-                Standalone Search Query:"""
-                
-                decision = await self.kernel.invoke_prompt(prompt=consolidation_prompt)
+                arguments = KernelArguments(
+                    chat_history=chat_history,
+                    query=query
+                )
+                decision = await self.kernel.invoke_prompt(prompt=CONSOLIDATION_PROMPT, arguments=arguments)
                 consolidated = str(decision).strip()
                 if consolidated:
                     search_query = consolidated
@@ -329,33 +320,37 @@ class GraphQueryEngine:
                 logger.warning(f"Query consolidation failed: {e}. Falling back to combined query.")
                 # Fallback: combine last user message and current query
                 user_queries = []
-                for line in chat_history.split("\n"):
-                    if line.startswith("[USER]:"):
-                        user_queries.append(line.replace("[USER]:", "").strip())
+                for line in chat_history.splitlines():
+                    if line.startswith("User:"):
+                        user_queries.append(line.replace("User:", "").strip())
                 if user_queries:
                     search_query = f"{user_queries[-1]} {query}"
-                else:
-                    context_anchor = chat_history[-150:].replace('\n', ' ')
-                    search_query = f"{context_anchor} {query}"
 
-        # 1. True Hybrid Search (RRF handles the exact-match heavy lifting now!)
-        top_semantic_nodes = self.vector_store.search(search_query, top_k=top_k)
+        # 1. Fetch relevant nodes from the hybrid vector store index
+        vector_hits = self.vector_store.search(search_query, top_k=top_k)
         
+        # 2. Add seed nodes
         seed_nodes = {}
-        for rank, node_id in enumerate(top_semantic_nodes):
-            # The #1 result gets highest score, scaling down linearly
-            seed_nodes[node_id] = float(len(top_semantic_nodes) - rank)
+        for hit in vector_hits:
+            node_id = hit["node_id"]
+            if node_id in G:
+                seed_nodes[node_id] = max(seed_nodes.get(node_id, 0), hit["score"])
+
+        # 3. Handle exact filename matches in vector store
+        query_words = re.findall(r"\w+", search_query.lower())
+        for node_id, data in G.nodes(data=True):
+            if data.get("type") == "file":
+                node_name = Path(str(node_id).replace("file::", "")).name.lower()
+                for qw in query_words:
+                    if len(qw) > 3 and qw in node_name:
+                        seed_nodes[node_id] = max(seed_nodes.get(node_id, 0), 0.9)
 
         if not seed_nodes:
-            logger.info("No direct matches found. Extracting central architectural hubs.")
-            hub_nodes = sorted(G.degree, key=lambda x: x[1], reverse=True)[:top_k]
-            subgraph_nodes = {node for node, _ in hub_nodes}
-            scores = {node: float(deg) for node, deg in hub_nodes}
-            for node in list(subgraph_nodes):
-                neighbors = (set(G.successors(node)) | set(G.predecessors(node))) if G.is_directed() else set(G.neighbors(node))
-                subgraph_nodes.update(neighbors)
-                for n in neighbors:
-                    scores.setdefault(n, 1.0)
+            logger.warning("Zero vector seeds found. Grabbing top graph components by degree centrality.")
+            degree_dict = dict(G.degree())
+            top_nodes = sorted(degree_dict, key=degree_dict.get, reverse=True)[:top_k]
+            subgraph_nodes = set(top_nodes)
+            scores = {n: 1.0 for n in top_nodes}
             return G.subgraph(subgraph_nodes), scores
 
         total_score = sum(seed_nodes.values())
@@ -386,31 +381,22 @@ class GraphQueryEngine:
             return G.subgraph(subgraph_nodes), scores
         
         
-    async def _load_graph(self):
+    async def _load_graph(self) -> nx.MultiDiGraph:
+        """Loads and returns the in-memory cached graph instance."""
         return await load_graph_cached(self.graph_path)
    
    
-    @timeit
-    async def _build_context_payload(self, user_query: str, chat_history: str = "") -> str:
-        target_dir = Path(self.target_repo_path)
-        
-        try:
-            G = await self._load_graph()
-        except Exception as e:
-            logger.error(f"Failed to load graph database: {e}")
-            raise FileNotFoundError("Graph database not found.")
-
-        # filtered_G = await self._get_relevant_subgraph(G=G, query=user_query, chat_history=chat_history)
-        filtered_G, relevance_scores = await self._get_relevant_subgraph(G=G, query=user_query, chat_history=chat_history)
-
-        context_lines = ["# Codebase Semantic Map\n", "## Components & Logic"]
-       
-        # 1. Add the Semantic Summaries
+    def _extract_semantic_summaries(self, filtered_G: nx.Graph) -> list[str]:
+        """Helper to extract and format structural/semantic summaries from subgraph nodes."""
+        lines = []
         for node_id, data in filtered_G.nodes(data=True):
             if summary := data.get("summary", ""):
-                context_lines.append(f"- [{data.get('type', 'unknown').upper()}] {node_id}: {summary}")
+                lines.append(f"- [{data.get('type', 'unknown').upper()}] {node_id}: {summary}")
+        return lines
 
-        # --- AUTOMATED STRUCTURAL AST SEARCH ---
+
+    def _run_structural_ast_search(self, user_query: str, G: nx.Graph) -> list[str]:
+        """Helper to run dynamic tree-sitter template parsing and graph queries on the fly."""
         structural_findings = []
         try:
             from core.ast_searcher import ASTSearcher
@@ -451,21 +437,28 @@ class GraphQueryEngine:
                             
         except Exception as e:
             logger.warning(f"Auto AST search query failed: {e}")
+        return structural_findings
 
-        if structural_findings:
-            context_lines.append("\n## Structural AST Queries")
-            context_lines.extend(structural_findings)
 
-        context_lines.append("\n## Structural Relationships")
+    def _extract_relationships(self, filtered_G: nx.Graph) -> list[str]:
+        """Helper to extract relationships (edges) from the relevant subgraph."""
+        lines = []
         for source, target, data in filtered_G.edges(data=True):
-            context_lines.append(f"- {source} explicitly {data.get('relation', 'unknown')} {target}")
+            lines.append(f"- {source} explicitly {data.get('relation', 'unknown')} {target}")
+        return lines
 
-        # --- DYNAMIC FILE INJECTION ---
-        context_lines.append("\n## Relevant Raw Source Code")
-       
-        # Build exact keyword search tokens list for direct checks and scoring
-        tokens = await self._extract_search_tokens_via_llm(user_query)
 
+    async def _extract_raw_source_context(
+        self, 
+        user_query: str, 
+        G: nx.Graph, 
+        filtered_G: nx.Graph, 
+        relevance_scores: dict, 
+        tokens: list[str]
+    ) -> list[str]:
+        """Helper to find top relevant source code files and extract exact range or snippet code."""
+        context_lines = []
+        target_dir = Path(self.target_repo_path)
         file_scores = {}
         for node_id, node_data in filtered_G.nodes(data=True):
             file_path = node_data.get("file_path")
@@ -516,19 +509,17 @@ class GraphQueryEngine:
                 match_score = info["match_score"]
                 score = base_score + token_bonus * match_score
                 token_list.append((rel_path, score))
-                # Update global file_scores for diagnostics
                 file_scores[rel_path] = score
                 
             token_list.sort(key=lambda x: x[1], reverse=True)
             token_to_files[token] = token_list
 
-        # 2. Round-robin selection loop with score-based list sorting to select top 5 files
+        # 2. Round-robin selection loop to grab top files
         selected_files = []
         selected_set = set()
         active_lists = {token: list(lst) for token, lst in token_to_files.items()}
         
         while len(selected_files) < 5 and active_lists:
-            # Sort tokens by the score of their highest remaining file
             sorted_tokens = sorted(
                 active_lists.keys(),
                 key=lambda t: active_lists[t][0][1] if active_lists[t] else -1.0,
@@ -582,31 +573,27 @@ class GraphQueryEngine:
             file_size = full_path.stat().st_size
 
             try:
-                # Read the file lines once
                 lines = (await asyncio.to_thread(full_path.read_text, encoding="utf-8")).splitlines()
             except Exception as e:
                 logger.error(f"FAIL: Could not read source file {full_path}: {e}")
                 continue
 
-            # Check if this is a structured source file with AST nodes in the graph
+            # Fetch class/function AST nodes matching this file path
             file_ast_nodes = []
             for node_id, node_data in G.nodes(data=True):
                 if node_data.get("file_path") == rel_path and node_data.get("type") in ["class", "function"]:
                     file_ast_nodes.append((node_id, node_data))
 
-            # Logic for HTML, JSON, or Flat Files
+            # HTML, JSON or unstructured flat script files logic
             if not is_source or not file_ast_nodes:
-                # Inject fully if it's small (JSON < 5 KB, flat file < 20 KB)
                 if (ext == ".json" and file_size < 5 * 1024) or (is_source and file_size < 20 * 1024):
                     code_content = "\n".join(lines)
                     clean_ext = ext.lstrip(".")
                     context_lines.append(f"\n### File: {rel_path}\n```{clean_ext}\n{code_content}\n```")
                     logger.info(f"SUCCESS: Injected full flat/config file: {full_path}")
                 else:
-                    # Otherwise, extract matched lines with a context window
                     matched_lines = file_to_matched_lines.get(rel_path, set())
                     if not matched_lines:
-                        # Extract first 30 lines as preview
                         snippet_code = "\n".join(lines[:30])
                         clean_ext = ext.lstrip(".")
                         context_lines.append(f"\n### Preview of {rel_path} (First 30 lines)\n```{clean_ext}\n{snippet_code}\n```")
@@ -633,11 +620,10 @@ class GraphQueryEngine:
                         logger.info(f"SUCCESS: Injected snippets for flat/config file: {full_path}")
                 continue
 
-            # Logic for Structured Source Files: Extract specific AST nodes
+            # Structured files: extract exact matching AST ranges
             matched_ast_nodes = set()
             matched_lines = file_to_matched_lines.get(rel_path, set())
 
-            # Find matching class/function nodes
             for node_id, node_data in file_ast_nodes:
                 node_name = node_data.get("name", "")
                 if node_name and any(tok.lower() in node_name.lower() for tok in tokens):
@@ -651,12 +637,10 @@ class GraphQueryEngine:
                         matched_ast_nodes.add((node_id, tuple(node_data.items())))
                         break
 
-            # If no node matched specifically (e.g. matched by filename), fetch all AST nodes in this file
             if not matched_ast_nodes:
                 for node_id, node_data in file_ast_nodes:
                     matched_ast_nodes.add((node_id, tuple(node_data.items())))
 
-            # Inject the matched AST nodes
             sorted_nodes = sorted(list(matched_ast_nodes), key=lambda x: dict(x[1]).get("line_start", 0))
             for node_id, node_tuple in sorted_nodes:
                 node_data = dict(node_tuple)
@@ -668,7 +652,7 @@ class GraphQueryEngine:
                 context_lines.append(f"\n### Code for [{node_type.upper()}] {node_id} (Lines {start}-{end})\n```{clean_ext}\n{node_code}\n```")
                 logger.info(f"SUCCESS: Injected AST node {node_id} from {full_path}")
 
-            # Inject any matching lines at global/module level (not inside any class/function)
+            # Grab global module-level context outside class/function scopes
             global_matched_lines = set()
             for line_no in matched_lines:
                 inside_node = False
@@ -699,44 +683,58 @@ class GraphQueryEngine:
                     context_lines.append(f"\n### Code snippet from {rel_path} (Lines {start_l}-{end_l})\n```{clean_ext}\n{snippet_code}\n```")
                 logger.info(f"SUCCESS: Injected global/module-level snippets for {full_path}")
 
+        return context_lines
+
+
+    @timeit
+    async def _build_context_payload(self, user_query: str, chat_history: str = "") -> str:
+        """
+        Orchestrates semantic, structural, and exact match searches to construct
+        a dense codebase context payload.
+        """
+        try:
+            G = await self._load_graph()
+        except Exception as e:
+            logger.error(f"Failed to load graph database: {e}")
+            raise FileNotFoundError("Graph database not found.")
+
+        filtered_G, relevance_scores = await self._get_relevant_subgraph(G=G, query=user_query, chat_history=chat_history)
+
+        context_lines = ["# Codebase Semantic Map\n", "## Components & Logic"]
+
+        # 1. Add Semantic Summaries
+        context_lines.extend(self._extract_semantic_summaries(filtered_G))
+
+        # 2. Automated Structural AST Search
+        structural_findings = self._run_structural_ast_search(user_query, G)
+        if structural_findings:
+            context_lines.append("\n## Structural AST Queries")
+            context_lines.extend(structural_findings)
+
+        # 3. Add Structural Relationships
+        context_lines.append("\n## Structural Relationships")
+        context_lines.extend(self._extract_relationships(filtered_G))
+
+        # 4. Dynamic File & Code Snippet Injection
+        context_lines.append("\n## Relevant Raw Source Code")
+        tokens = await self._extract_search_tokens_via_llm(user_query)
+        raw_code_lines = await self._extract_raw_source_context(user_query, G, filtered_G, relevance_scores, tokens)
+        context_lines.extend(raw_code_lines)
+
         return "\n".join(context_lines)
-    
+
 
     async def _route_query(self, user_query: str, chat_history: str) -> str:
         """
-        The Traffic Cop: Decides if we need to search the graph or just chat.
+        Decides if the user query is purely conversational or requires codebase context logic.
         """
-        router_prompt = f"""You are an elite, high-speed routing engine for a local repository AI assistant.
-            Your sole job is to classify the user's latest input into one of two routing destinations:
-
-            1. 'CONVERSATIONAL': Choose this ONLY if the user is greeting you, making small talk, or asking meta-questions about the chat history itself (e.g., "What did I just ask?").
-            2. 'CODEBASE': Choose this for anything else. 
-            **CRITICAL OVERRIDE:** If the user asks an explanatory question like "How does X work?", "Why do we use Y?", or "What advantage does Z provide?", you MUST route to CODEBASE so the agent can read the repository files to find the answer.
-
-            ---
-            FEW-SHOT EXAMPLES:
-
-            Input: "Hi there" -> Destination: CONVERSATIONAL
-            Input: "What questions did I ask you so far?" -> Destination: CONVERSATIONAL
-            Input: "Can you tell what advantage Data Normalizer did provide?" -> Destination: CODEBASE
-            Input: "Why are we using a median blur here?" -> Destination: CODEBASE
-            Input: "process_data_frame" -> Destination: CODEBASE
-            Input: "thanks for the help" -> Destination: CONVERSATIONAL
-            Input: "where is the threshold setting?" -> Destination: CODEBASE
-            ---
-
-            Current Chat History:
-            {chat_history}
-
-            Latest User Input: "{user_query}"
-
-            Respond with EXACTLY one word, either 'CONVERSATIONAL' or 'CODEBASE'. Do not include punctuation, explanation, or markdown formatting.
-
-            Destination:"""
-            
         try:
             # A blazing fast, non-streaming call to get the routing word
-            decision = await self.kernel.invoke_prompt(prompt=router_prompt)
+            arguments = KernelArguments(
+                chat_history=chat_history,
+                user_query=user_query
+            )
+            decision = await self.kernel.invoke_prompt(prompt=ROUTER_PROMPT, arguments=arguments)
             decision_text = str(decision).strip().upper()
             
             if "CONVERSATIONAL" in decision_text:
@@ -800,9 +798,6 @@ class GraphQueryEngine:
                
                 # 1. LOG AND YIELD JSON CHUNK
                 if chunk.content:
-                    # --- NEW: PRINT DIRECTLY TO TERMINAL ---
-                    # print(f"RAW: [{chunk.content}]", flush=True)
-                   
                     yield json.dumps({"type": "chunk", "content": chunk.content}) + "\n"
                    
                 # 2. Dynamic Telemetry Extraction Strategy
@@ -858,15 +853,10 @@ class GraphQueryEngine:
                     logger.warning(f"Could not parse telemetry from chunk: {e}")
 
         except Exception as e:
-            # 1. Get a clean, stringified version of the error without the massive traceback
             error_str = str(e)
-            
-            # 2. Check if it's a connection-related death
             if "Connection error" in error_str or "ConnectError" in error_str or "Failed to connect" in error_str:
                 logger.error("LLM Connection Refused: Ensure llama.cpp/Ollama/LM Studio is running and port is correct.")
                 yield "\n\n🚨 **Connection Lost:** Cannot reach the local LLM server. Please check if your inference engine is running."
             else:
-                # 3. Handle context window overflows or other generation errors cleanly
                 logger.error(f"LLM Generation Error: {error_str}")
                 yield f"\n\n⚠️ **Inference Error:** The LLM encountered an issue. Make sure your context window isn't overflowing."
-

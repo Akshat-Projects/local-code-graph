@@ -1,3 +1,8 @@
+"""
+Provides AST structural search capabilities across multiple programming languages
+using Tree-sitter tree matching queries and filters.
+"""
+
 import os
 import networkx as nx
 from pathlib import Path

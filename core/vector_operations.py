@@ -1,3 +1,8 @@
+"""
+Provides hybrid search functionalities combining dense FAISS embeddings (with manual 
+Matryoshka dimensionality reduction) and sparse BM25s token rank-fusion (RRF).
+"""
+
 import os
 import json
 import numpy as np
@@ -148,7 +153,7 @@ class HybridVectorStore:
         self.bm25_retriever.save(self.bm25_dir, corpus=texts_for_bm25)
         
         
-    def search(self, query: str, top_k: int = 15) -> List[str]:
+    def search(self, query: str, top_k: int = 15) -> List[dict]:
         if not self.metadata:
             return []
 
@@ -189,44 +194,5 @@ class HybridVectorStore:
         fused_results = self._reciprocal_rank_fusion(dense_node_ids, sparse_node_ids)
         
         # 4. Return only the highly-vetted top_k request
-        return [node_id for node_id, score in fused_results[:top_k]]
+        return [{"node_id": node_id, "score": score} for node_id, score in fused_results[:top_k]]
 
-    # def search(self, query: str, top_k: int = 5) -> List[str]:
-    #     if not self.metadata:
-    #         return []
-
-    #     # Asymmetric Query Format
-    #     formatted_query = f"task: search result | query: {query}"
-        
-    #     # Run inference via llama.cpp
-    #     response = self.encoder.create_embedding([formatted_query])
-    #     query_vector = np.array([response["data"][0]["embedding"]], dtype=np.float32)
-        
-    #     # --- MANUAL MATRYOSHKA TRUNCATION ---
-    #     # Ensure the query vector is also C-contiguous before passing to FAISS
-    #     query_vector = np.ascontiguousarray(query_vector[:, :self.dimension], dtype=np.float32)
-    #     faiss.normalize_L2(query_vector)
-        
-    #     _, dense_indices = self.index.search(query_vector, min(top_k * 2, len(self.metadata)))
-        
-    #     dense_node_ids = []
-    #     for idx in dense_indices[0]:
-    #         if idx != -1 and idx < len(self.metadata):
-    #             dense_node_ids.append(self.metadata[idx]["node_id"])
-
-    #     # --- 2. Sparse Search (BM25) ---
-    #     sparse_node_ids = []
-    #     if self.bm25_retriever:
-    #         query_tokens = bm25s.tokenize([query])
-    #         sparse_indices, _ = self.bm25_retriever.retrieve(query_tokens, k=min(top_k * 2, len(self.metadata)))
-            
-    #         for item in sparse_indices[0]:
-    #             # Safely extract the integer ID whether bm25s returns a dict, an object, or a raw int
-    #             idx = item["id"] if isinstance(item, dict) else getattr(item, "id", item)
-                
-    #             # Now safely compare the integer
-    #             if isinstance(idx, int) and idx < len(self.metadata):
-    #                 sparse_node_ids.append(self.metadata[idx]["node_id"])
-
-    #     fused_results = self._reciprocal_rank_fusion(dense_node_ids, sparse_node_ids)
-    #     return [node_id for node_id, score in fused_results[:top_k]]

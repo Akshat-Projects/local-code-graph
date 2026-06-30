@@ -1,3 +1,8 @@
+"""
+Defines the LangGraph node functions for routing, querying, and generating 
+responses based on codebase analysis and context payloads.
+"""
+
 from typing import Any, Mapping
 from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_openai import ChatOpenAI
@@ -10,6 +15,7 @@ from intelligence_layer.query_engine import GraphQueryEngine
 from utils.helper import timeit
 from config import settings
 from utils.logger import get_logger
+from intelligence_layer.prompts import ROUTER_SYSTEM_PROMPT
 
 logger = get_logger()
 
@@ -72,28 +78,7 @@ async def router_node(state: GraphRAGState):
     chat_history = state.get("chat_history", "")
     
     # 2. Define the routing instructions
-    system_prompt = """You are an elite, high-speed routing engine for a local repository AI assistant.
-    Your sole job is to classify the user's latest input into one of two routing destinations:
-
-    1. 'CONVERSATIONAL': Choose this ONLY if the user is greeting you, making small talk, or asking meta-questions about the chat history itself (e.g., "What did I just ask?").
-    2. 'CODEBASE': Choose this for anything else. 
-    **CRITICAL OVERRIDE:** If the user asks an explanatory question like "How does X work?", "Why do we use Y?", "Why this doesn't work?", or requests code/snippets (e.g. "Can you fetch code snippet of it?"), you MUST route to CODEBASE.
-
-    ---
-    FEW-SHOT EXAMPLES:
-
-    Input: "Hi there" -> Destination: CONVERSATIONAL
-    Input: "What questions did I ask you so far?" -> Destination: CONVERSATIONAL
-    Input: "Can you tell what advantage Data Normalizer did provide?" -> Destination: CODEBASE
-    Input: "Why are we using a median blur here?" -> Destination: CODEBASE
-    Input: "process_data_frame" -> Destination: CODEBASE
-    Input: "thanks for the help" -> Destination: CONVERSATIONAL
-    Input: "where is the threshold setting?" -> Destination: CODEBASE
-    Input: "Can you fetch code snippet of it?" -> Destination: CODEBASE
-    ---
-
-    Respond with EXACTLY one word, either 'CONVERSATIONAL' or 'CODEBASE'. Do not include punctuation or markdown.
-    """
+    system_prompt = ROUTER_SYSTEM_PROMPT
     
     # 3. Build and execute the prompt chain
     prompt = ChatPromptTemplate.from_messages([

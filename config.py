@@ -1,3 +1,8 @@
+"""
+Loads, validates, and exposes configuration settings for both frontend and backend
+from the environment or a .env file using Pydantic Settings base classes.
+"""
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

@@ -1,3 +1,8 @@
+"""
+Provides utility classes to assemble code files and dependencies into cohesive context modules,
+forming ingestion batches and structural symbol lists for analysis.
+"""
+
 import os
 import networkx as nx
 from typing import Dict, List, Any

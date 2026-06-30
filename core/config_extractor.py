@@ -1,3 +1,8 @@
+"""
+Parses structural configurations (JSON, YAML, TOML, XML) in target repositories
+and maps them to configuration nodes in the graph database.
+"""
+
 import json
 import re
 import tomllib
