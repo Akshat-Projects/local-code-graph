@@ -89,13 +89,23 @@ class ASTSearcher:
                 if not has_calls:
                     continue
                     
+            try:
+                line_start = int(data.get("line_start", 0))
+            except (ValueError, TypeError):
+                line_start = 0
+
+            try:
+                line_end = int(data.get("line_end", 0))
+            except (ValueError, TypeError):
+                line_end = 0
+
             results.append({
                 "id": str(node_id),
                 "type": data.get("type", "unknown"),
                 "name": node_name,
                 "file_path": data.get("file_path", ""),
-                "line_start": data.get("line_start", 0),
-                "line_end": data.get("line_end", 0),
+                "line_start": line_start,
+                "line_end": line_end,
                 "summary": data.get("summary", "")
             })
             

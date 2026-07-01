@@ -105,38 +105,34 @@ class Librarian:
         """
         target_dir = Path(target_repo_path)
         file_manifest = {}
-        
-        # If the pipeline handed us a safe list, use it. Otherwise, scan everything.
         files_to_scan = valid_files if valid_files is not None else [f for f in target_dir.rglob("*") if f.is_file()]
-        
-        workspace_root = self.storage_dir.parent.parent.parent
-        cache_dir = workspace_root / ".localgraph" / "cache"
+
+        cache_dir = self.storage_dir / "cache"   # scoped to this repo, not the whole workspace
 
         for file_path in files_to_scan:
-            # We only want to parse Python files (preserving your original logic)
             if file_path.suffix not in AllowedTypes.SUPPORTED_EXTENSIONS:
                 continue
-                
-            # Convert Path objects to strings for compatibility with the rest of your app
+
             full_path = str(file_path.absolute())
             relative_path = str(file_path.relative_to(target_dir))
-            
             current_hash = self.calculate_file_hash(full_path)
-            
-            # Check separate extraction cache
-            cache_file = cache_dir / f"v4_{current_hash}.json"
+
+            # Key on path + content, so identical-content files don't collide
+            cache_key = hashlib.sha256(f"{relative_path}::{current_hash}".encode()).hexdigest()
+            cache_file = cache_dir / f"v4_{cache_key}.json"
+
             if cache_file.exists():
                 status = "unchanged"
                 self.load_from_cache(cache_file)
             else:
                 status = "modified"
-            
+
             file_manifest[relative_path] = {
                 "absolute_path": full_path,
                 "hash": current_hash,
-                "status": status
+                "status": status,
             }
-                
+
         return file_manifest
 
 
@@ -173,6 +169,7 @@ class Librarian:
                             exists = True
                 if not exists:
                     self.graph.add_edge(u, v, **attrs)
+                
             logger.info(f"Loaded cached structure from {cache_file_path}")
         except Exception as e:
             logger.error(f"Failed to load cache from {cache_file_path}: {e}")
@@ -182,11 +179,13 @@ class Librarian:
         import json
         if not file_hash:
             return
-        workspace_root = self.storage_dir.parent.parent.parent
-        cache_dir = workspace_root / ".localgraph" / "cache"
+        # workspace_root = self.storage_dir.parent.parent.parent
+        cache_dir = self.storage_dir / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_file = cache_dir / f"v4_{file_hash}.json"
-        
+
+        cache_key = hashlib.sha256(f"{relative_path}::{file_hash}".encode()).hexdigest()
+        cache_file = cache_dir / f"v4_{cache_key}.json"
+            
         file_node_id = f"file::{relative_path}"
         nodes_to_cache = []
         edges_to_cache = []

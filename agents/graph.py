@@ -1,5 +1,4 @@
 """
-What this code does:
 Compiles the primary LangGraph StateGraph workflow, orchestrating conditional routing edges
 between supervisors, codebase agents, synthesizers, and small talk nodes.
 """

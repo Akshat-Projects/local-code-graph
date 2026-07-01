@@ -601,23 +601,59 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         }
     });
 
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let initialLeft = 0;
+    let initialTop = 0;
+
+    const chatHeader = chatWrap.querySelector('.chat-header-container');
+    chatHeader.style.cursor = 'move';
+
+    const onMouseMove = (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - dragStartX;
+        const dy = e.clientY - dragStartY;
+        chatWrap.style.left = (initialLeft + dx) + 'px';
+        chatWrap.style.top = (initialTop + dy) + 'px';
+    };
+
+    const onMouseUp = () => {
+        isDragging = false;
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    const onMouseDown = (e) => {
+        if (!chatWrap.classList.contains('popped-out')) return;
+        if (e.target.closest('button') || e.target.closest('input')) return;
+        
+        isDragging = true;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        
+        const rect = chatWrap.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+        
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        e.preventDefault();
+    };
+
     popoutToggle.addEventListener('click', () => {
         const isPoppedOut = chatWrap.classList.toggle('popped-out');
         if (isPoppedOut) {
             document.body.appendChild(chatWrap);
             popoutToggle.innerText = '⤡'; 
             popoutToggle.style.transform = 'rotate(45deg)';
-            chatWrap.setAttribute('draggable', true);
-            chatWrap.addEventListener('dragend', function(e) {
-                chatWrap.style.left = e.clientX + 'px';
-                chatWrap.style.top = e.clientY + 'px';
-            });
+            chatHeader.addEventListener('mousedown', onMouseDown);
         } else {
             const legendWrap = document.getElementById('legend-wrap');
             document.getElementById('sidebar').insertBefore(chatWrap, legendWrap);
             popoutToggle.innerText = '⤢';
             popoutToggle.style.transform = 'none';
-            chatWrap.removeAttribute('draggable');
+            chatHeader.removeEventListener('mousedown', onMouseDown);
             chatWrap.style.left = '';
             chatWrap.style.top = '';
         }

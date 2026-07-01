@@ -37,13 +37,13 @@ Strictly avoid using LaTeX (like $\checkmark$ or $\times$) for formatting or bul
 ---
 ### DYNAMIC PAYLOAD:
 TARGET NODES: 
-{{$target_nodes}}
+{{{{$target_nodes}}}}
 
 GLOBAL SYMBOL LIST: 
-{{$global_symbol_list}}
+{{{{$global_symbol_list}}}}
 
 RAW CODE:
-{{$raw_code}}
+{{{{$raw_code}}}}
 """
 
 GRAPH_RAG_PROMPT = """You are an expert Principal Software Engineer. 

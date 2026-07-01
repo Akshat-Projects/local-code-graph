@@ -1,5 +1,4 @@
 """
-What this code does:
 Orchestrates semantic, structural, and exact keyword searches across the code graph database,
 determines the routing intent, builds context payloads for local LLM consumption, 
 and streams final synthesized responses with telemetry.

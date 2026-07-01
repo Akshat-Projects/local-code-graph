@@ -86,13 +86,17 @@ class GraphAnalyst:
         stop=stop_after_attempt(3),
         reraise=True
     )
-    async def _invoke_llm_with_retries(self, arguments: KernelArguments):
-        """Wraps the LLM call with exponential backoff retries."""
+    async def _invoke_llm_with_retries(self, arguments: KernelArguments) -> str:
+        """Wraps the LLM call and schema validation with exponential backoff retries."""
         logger.debug("Sending prompt to LLM inference engine...")
-        return await self.kernel.invoke_prompt(
+        result = await self.kernel.invoke_prompt(
             prompt=CODE_ANALYSIS_PROMPT,
             arguments=arguments
         )
+        raw_response = self._clean_json_response(str(result))
+        # Validate raw response matches the Pydantic schema before returning
+        ModuleAnalysis.model_validate_json(raw_response)
+        return raw_response
        
        
     async def _analyze_file_summary(self, batch_data: dict, file_node: str) -> None:
@@ -138,12 +142,11 @@ class GraphAnalyst:
         )
 
         try:
-            result = await self._invoke_llm_with_retries(arguments)
-            raw_response = self._clean_json_response(str(result))
+            raw_response = await self._invoke_llm_with_retries(arguments)
             self._process_llm_response(raw_response, batch_data)
 
         except ValidationError as e:
-            logger.error(f"Schema Validation Error on {batch_data['file_path']}: {e}")
+            logger.error(f"Schema Validation Error on {batch_data['file_path']} after retries: {e}")
             for node_id in target_node_ids:
                 if node_id in self.librarian.graph:
                    self.librarian.graph.nodes[node_id]["analysis_status"] = "failed_validation"
@@ -153,7 +156,7 @@ class GraphAnalyst:
                 await asyncio.to_thread(self.librarian.save_graph, graph_copy)
 
         except Exception as e:
-            logger.error(f"Execution Error on {batch_data['file_path']}: {e}")
+            logger.error(f"Execution Error on {batch_data['file_path']} after retries: {e}")
             for node_id in target_node_ids:
                 if node_id in self.librarian.graph:
                     self.librarian.graph.nodes[node_id]["analysis_status"] = "failed_runtime"
@@ -167,7 +170,8 @@ class GraphAnalyst:
         """Parses and validates LLM analysis, injecting summaries and dependency edges into the graph."""
         parsed_data = ModuleAnalysis.model_validate_json(raw_response)
         logger.info(f"Successfully parsed {len(parsed_data.analyzed_nodes)} nodes for {batch_data['file_path']}.")
-
+        
+        target_node_ids = batch_data["contained_nodes"]
         processed_nodes = set()
         for node_data in parsed_data.analyzed_nodes:
             node_id = node_data.node_id
@@ -200,8 +204,13 @@ class GraphAnalyst:
                             confidence_score=edge.confidence_score
                         )
 
-        target_node_ids = batch_data["contained_nodes"]
         omitted_nodes = set(target_node_ids) - processed_nodes
+        logger.info(
+            f"[DIAG Ingest] File: {batch_data['file_path']} | "
+            f"Target Nodes: {target_node_ids} | "
+            f"Returned Nodes: {list(processed_nodes)} | "
+            f"Raw Response: {raw_response}"
+        )
         for missing_id in omitted_nodes:
             if missing_id in self.librarian.graph:
                 self.librarian.graph.nodes[missing_id]["analysis_status"] = "failed_validation"

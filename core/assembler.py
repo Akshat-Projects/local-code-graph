@@ -34,6 +34,25 @@ class ContextAssembler:
         batches = {}
         file_nodes = [n for n, d in self.graph.nodes(data=True) if d.get("type") == "file"]
         
+        # Self-heal graph by pruning directory paths registered as files
+        invalid_file_nodes = []
+        for file_node in file_nodes:
+            file_path = self.graph.nodes[file_node].get("file_path", "")
+            if file_path:
+                absolute_path = os.path.join(self.target_repo_path, file_path)
+                if os.path.isdir(absolute_path):
+                    invalid_file_nodes.append(file_node)
+                    
+        if invalid_file_nodes:
+            for file_node in invalid_file_nodes:
+                logger.info(f"Pruning invalid directory node from graph: {file_node}")
+                try:
+                    self.graph.remove_node(file_node)
+                except Exception as e:
+                    logger.warning(f"Failed to prune node {file_node}: {e}")
+            # Re-fetch file nodes
+            file_nodes = [n for n, d in self.graph.nodes(data=True) if d.get("type") == "file"]
+
         logger.info(f"[DIAG] Total nodes in graph: {self.graph.number_of_nodes()} | File-type nodes found: {len(file_nodes)}")
         if file_nodes:
             logger.info(f"[DIAG] Sample file node: {file_nodes[0]} -> {self.graph.nodes[file_nodes[0]]}")
@@ -43,12 +62,10 @@ class ContextAssembler:
             file_path = self.graph.nodes[file_node]["file_path"]
             absolute_path = os.path.join(self.target_repo_path, file_path)
             
-            internal_nodes = list(self.graph.successors(file_node))
-            method_nodes = []
-            for node in internal_nodes:
-                if self.graph.nodes[node].get("type") == "class":
-                    method_nodes.extend(self.graph.successors(node))
-            internal_nodes.extend(method_nodes)
+            internal_nodes = [
+                node for node, ndata in self.graph.nodes(data=True)
+                if ndata.get("file_path") == file_path and ndata.get("type") in ["class", "function"]
+            ]
             
             try:
                 with open(absolute_path, "r", encoding="utf-8") as f:

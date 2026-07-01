@@ -81,7 +81,7 @@ with st.sidebar:
     run_llm = st.toggle("🧠 Run Deep LLM Analysis", value=True, help="Disable to instantly build the structural graph. You can run LLM summarization later by re-ingesting with this checked.")
     # show_configs = st.toggle("Show Infrastructure & Libraries", value=True)
     
-    if st.button("Ingest & Analyze Codebase", use_container_width=True):
+    if st.button("Ingest & Analyze Codebase", width="stretch"):
         if st.session_state.is_generating:
             st.session_state.interruption_message = (
                 "⚠️ Response generation was interrupted because a codebase ingestion was started."
@@ -175,7 +175,7 @@ with st.sidebar:
         )
         
     st.divider()
-    if st.button("🗑️ Clear Chat History", use_container_width=True):
+    if st.button("🗑️ Clear Chat History", width="stretch"):
         st.session_state.messages = []
         st.session_state.latest_telemetry = None
         st.session_state.is_generating = False
@@ -466,7 +466,7 @@ if st.session_state.view_mode == "💬 AI Assistant":
         edited_prompt = st.text_area("Your Prompt", value=st.session_state.prefill_prompt, height=100, key="edit_prompt_area")
         col_btn1, col_btn2 = st.columns([0.15, 0.85])
         with col_btn1:
-            if st.button("🚀 Resend", use_container_width=True, key="resend_edit_btn"):
+            if st.button("🚀 Resend", width="stretch", key="resend_edit_btn"):
                 st.session_state.messages.append({"role": "user", "content": edited_prompt})
                 st.session_state.prefill_prompt = None
                 st.session_state.latest_telemetry = None
@@ -497,7 +497,7 @@ if st.session_state.view_mode == "💬 AI Assistant":
                 t.start()
                 st.rerun()
         with col_btn2:
-            if st.button("❌ Cancel", use_container_width=True, key="cancel_edit_btn"):
+            if st.button("❌ Cancel", width="stretch", key="cancel_edit_btn"):
                 # Put original user message back before resetting to avoid loss of history
                 st.session_state.messages.append({"role": "user", "content": st.session_state.prefill_prompt})
                 st.session_state.prefill_prompt = None
@@ -668,7 +668,7 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
             help="Leiden Clustering Levels:\n- Macro-Communities: Groups code files into broader systems/packages based on high-level dependencies.\n- Micro-Communities: Recursively sub-clusters macro groups into smaller, fine-grained module/class-level groupings. Note: Run ingestion again to calculate hierarchical clustering metadata for your codebase."
         )
     
-    if st.button("🔄 Render Map", use_container_width=True):
+    if st.button("🔄 Render Map", width="stretch"):
         with st.spinner("Fetching topography from LocalGraph Engine..."):
             try:
                 res = requests.get(
@@ -828,7 +828,7 @@ elif st.session_state.view_mode == "🔍 AST Search Explorer":
             inherits_q = st.text_input("Inherits from class", placeholder="e.g. BaseModel", help="Find classes that inherit from a specific parent class.")
             calls_q = st.text_input("Calls symbol", placeholder="e.g. get_logger", help="Find functions/classes that invoke a specific target method or function.")
             
-        if st.button("Query Graph Structure", use_container_width=True):
+        if st.button("Query Graph Structure", width="stretch"):
             filters = {}
             if node_type != "All":
                 filters["node_type"] = node_type
@@ -850,8 +850,62 @@ elif st.session_state.view_mode == "🔍 AST Search Explorer":
                     if res.status_code == 200:
                         results = res.json().get("results", [])
                         if results:
+                            import pandas as pd
                             st.success(f"Found {len(results)} matching code nodes!")
-                            st.dataframe(results, use_container_width=True)
+                            
+                            tab1, tab2 = st.tabs(["📊 Quick Grid", "📄 Detailed Summaries"])
+                            
+                            with tab1:
+                                df = pd.DataFrame(results)
+                                
+                                # Display line numbers as empty for file nodes or when zero
+                                if "line_start" in df.columns:
+                                    df["line_start"] = df.apply(lambda r: None if r.get("type") == "file" or r["line_start"] == 0 else r["line_start"], axis=1)
+                                if "line_end" in df.columns:
+                                    df["line_end"] = df.apply(lambda r: None if r.get("type") == "file" or r["line_end"] == 0 else r["line_end"], axis=1)
+                                    
+                                cols_order = ["name", "type", "file_path", "line_start", "line_end", "summary"]
+                                existing_cols = [c for c in cols_order if c in df.columns]
+                                df = df[existing_cols]
+                                
+                                st.dataframe(
+                                    df,
+                                    column_config={
+                                        "name": st.column_config.TextColumn("Symbol Name", width="medium"),
+                                        "type": st.column_config.TextColumn("Type", width="small"),
+                                        "file_path": st.column_config.TextColumn("File Path", width="medium"),
+                                        "line_start": st.column_config.NumberColumn("Start Line", format="%d", width="small"),
+                                        "line_end": st.column_config.NumberColumn("End Line", format="%d", width="small"),
+                                        "summary": st.column_config.TextColumn("Summary", width="large"),
+                                    },
+                                    width="stretch",
+                                    hide_index=True
+                                )
+                                
+                            with tab2:
+                                import os
+                                for idx, item in enumerate(results):
+                                    name = item.get("name", "")
+                                    ntype = item.get("type", "")
+                                    file_path = item.get("file_path", "")
+                                    line_start = item.get("line_start", 0)
+                                    line_end = item.get("line_end", 0)
+                                    summary = item.get("summary", "")
+                                    
+                                    line_info = f"Lines {line_start}-{line_end}" if line_start and line_end else "File Node"
+                                    
+                                    abs_path = os.path.join(st.session_state.target_path, file_path)
+                                    file_url = f"file://{abs_path}"
+                                    if line_start:
+                                        file_url += f"#L{line_start}"
+                                        
+                                    header_emoji = "📁" if ntype == "file" else ("🧩" if ntype == "class" else "⚡")
+                                    display_label = f"{header_emoji} {name} ({file_path}{f':{line_start}' if line_start else ''})"
+                                    
+                                    with st.expander(display_label):
+                                        st.markdown(f"**Type:** `{ntype}` | **Location:** [{file_path}]({file_url}) ({line_info})")
+                                        st.markdown("**Architectural Summary:**")
+                                        st.markdown(summary if summary else "*No summary generated yet.*")
                         else:
                             st.info("No nodes match the structural filters.")
                     else:
@@ -879,7 +933,7 @@ elif st.session_state.view_mode == "🔍 AST Search Explorer":
                 pattern = selected_template
                 st.info(f"Using predefined structural template: `{pattern}`")
                 
-        if st.button("Run Tree-sitter Pattern Search", use_container_width=True):
+        if st.button("Run Tree-sitter Pattern Search", width="stretch"):
             with st.spinner("Scanning files on-the-fly via Tree-sitter..."):
                 try:
                     res = requests.post(f"{API_BASE}/query/search", json={

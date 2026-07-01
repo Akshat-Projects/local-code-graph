@@ -57,8 +57,6 @@ def resolve_python_import(target_repo_path: str, current_relative_path: str, imp
         if possible_init.is_file():
             return str(possible_init.relative_to(base_dir))
             
-        if resolved_path.is_dir():
-            return str(resolved_path.relative_to(base_dir))
     except Exception:
         pass
     return None
