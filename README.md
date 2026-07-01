@@ -132,6 +132,8 @@ If you prefer starting services individually, run them in separate terminal wind
 1. **Boot the LLM Engine:**
 
 You can also use `Multi-Token Prediction (MTP)` models for faster inference using speculative decoding. The quality of output remains almost same with upto 3-4x faster token output on relevant hardware-model combination.
+
+*`Do check llm_benchmark.md for benchmark result of different models with Multi-Token Prediction (MTP)`*
    ```bash
    cd ~/llama.cpp/build
    ./bin/llama-server -m ~/llmhost/model/gemma-4-E4B-it-Q4_K_M.gguf -ngl 999 -c 131072 -fa on -ctk q4_0 -ctv q4_0 --host 0.0.0.0 --port 8080 --jinja --pooling rank
