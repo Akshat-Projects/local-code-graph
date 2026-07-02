@@ -188,9 +188,9 @@ with st.sidebar:
         telemetry_container.caption("Awaiting query...")
 
 # ==========================================
-# MAIN PANEL: GRAPH-RAG TERMINAL
+# MAIN PANEL: GRAPH TERMINAL
 # ==========================================
-st.title("🧠 LocalGraph RAG Terminal")
+st.title("🧠 Local CodeGraph Terminal")
 st.caption(f"Currently querying isolated graph database: **{st.session_state.active_repo}**")
 
 # Create navigation menu at the top
