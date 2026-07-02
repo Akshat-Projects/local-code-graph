@@ -1,3 +1,8 @@
+"""
+Registers global exception handlers for the FastAPI application, capturing
+uncaught runtime errors and formatting them as standard JSON error responses.
+"""
+
 from fastapi import Request
 from fastapi.responses import JSONResponse
 

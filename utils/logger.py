@@ -1,3 +1,8 @@
+"""
+Initializes custom logging configuration with rotating file handlers and console output,
+providing deep-trace formatting layout for debugging.
+"""
+
 import inspect
 import logging
 from logging.handlers import RotatingFileHandler

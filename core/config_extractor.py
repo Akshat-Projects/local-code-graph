@@ -1,3 +1,8 @@
+"""
+Parses structural configurations (JSON, YAML, TOML, XML) in target repositories
+and maps them to configuration nodes in the graph database.
+"""
+
 import json
 import re
 import tomllib
@@ -42,7 +47,21 @@ class ConfigExtractor:
             )
         
         relation = "defines_service" if node_type == "infrastructure" else "depends_on"
-        self.graph.add_edge(file_node_id, target_node_id, relation=relation)
+        
+        # Deduplicate: check if an edge with the same relation already exists
+        exists = False
+        if self.graph.has_edge(file_node_id, target_node_id):
+            if self.graph.is_multigraph():
+                for existing_attrs in self.graph[file_node_id][target_node_id].values():
+                    if existing_attrs.get("relation") == relation:
+                        exists = True
+                        break
+            else:
+                existing_attrs = self.graph[file_node_id][target_node_id]
+                if existing_attrs.get("relation") == relation:
+                    exists = True
+        if not exists:
+            self.graph.add_edge(file_node_id, target_node_id, relation=relation, confidence="EXTRACTED", confidence_score=1.0)
 
     def _parse_package_json(self, file_path: str, file_node_id: str):
         try:

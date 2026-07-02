@@ -1,3 +1,8 @@
+"""
+Serves as the main entry point to launch the FastAPI backend server for LocalGraph AI,
+handling middleware setup, exception handling, custom uvicorn logging hooks, and API routing.
+"""
+
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI

@@ -1,3 +1,8 @@
+"""
+Provides shared utility helper functions and decorators (e.g. execution timer timeit,
+path validation, ignore specs processing) used throughout the application.
+"""
+
 import time
 import inspect
 from functools import wraps

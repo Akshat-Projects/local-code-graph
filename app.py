@@ -1,3 +1,8 @@
+"""
+Provides a fully-featured Streamlit UI frontend for LocalGraph AI, enabling repository 
+ingestion configuration, interactive vis.js graph visualization, and streaming chatbot queries.
+"""
+
 import streamlit.components.v1 as components
 import json
 import requests
@@ -56,6 +61,8 @@ if "generation_chunks" not in st.session_state:
     st.session_state.generation_chunks = []
 if "generation_status" not in st.session_state:
     st.session_state.generation_status = {"status": "idle"}
+if "view_mode" not in st.session_state:
+    st.session_state.view_mode = "💬 AI Assistant"
 
 # Top level autorefresh when background thread is active and user is viewing the chat
 if st.session_state.is_generating and st.session_state.get("view_mode", "💬 AI Assistant") == "💬 AI Assistant":
@@ -74,7 +81,7 @@ with st.sidebar:
     run_llm = st.toggle("🧠 Run Deep LLM Analysis", value=True, help="Disable to instantly build the structural graph. You can run LLM summarization later by re-ingesting with this checked.")
     # show_configs = st.toggle("Show Infrastructure & Libraries", value=True)
     
-    if st.button("Ingest & Analyze Codebase", use_container_width=True):
+    if st.button("Ingest & Analyze Codebase", width="stretch"):
         if st.session_state.is_generating:
             st.session_state.interruption_message = (
                 "⚠️ Response generation was interrupted because a codebase ingestion was started."
@@ -168,7 +175,7 @@ with st.sidebar:
         )
         
     st.divider()
-    if st.button("🗑️ Clear Chat History", use_container_width=True):
+    if st.button("🗑️ Clear Chat History", width="stretch"):
         st.session_state.messages = []
         st.session_state.latest_telemetry = None
         st.session_state.is_generating = False
@@ -187,10 +194,9 @@ st.title("🧠 LocalGraph RAG Terminal")
 st.caption(f"Currently querying isolated graph database: **{st.session_state.active_repo}**")
 
 # Create navigation menu at the top
-st.radio(
+st.segmented_control(
     "Navigation",
-    ["💬 AI Assistant", "🕸️ Interactive Architecture Map"],
-    horizontal=True,
+    ["💬 AI Assistant", "🕸️ Interactive Architecture Map", "🔍 AST Search Explorer"],
     label_visibility="collapsed",
     key="view_mode"
 )
@@ -308,7 +314,7 @@ def build_graph_objects(raw_data, show_functions, search_term, expanded_classes,
             target=e["target"],
             label=e["label"],
             color="#4a5568",
-            width=0.5,
+            width=0.3,
         )
         for e in all_edges
         if e["source"] in visible_ids and e["target"] in visible_ids
@@ -385,6 +391,8 @@ def render_graph_health_banner(repo_name: str, layout_context: str = "visualizer
     DRY Helper to fetch graph status and render warnings dynamically.
     layout_context can be 'visualizer' or 'chatbot'.
     """
+    if not repo_name or not repo_name.strip():
+        return False
     try:
         res = requests.get(f"{API_BASE}/query/status/{repo_name}")
         if res.status_code == 200:
@@ -445,6 +453,7 @@ def stop_generation():
     st.session_state.generation_chunks = []
     st.session_state.generation_status = {"status": "idle"}
     st.session_state.is_generating = False
+    st.session_state.latest_telemetry = None
 
 # ==========================================
 # TAB 1: CHAT INTERFACE & RENDER LOOP
@@ -453,35 +462,46 @@ def stop_generation():
 if st.session_state.view_mode == "💬 AI Assistant":
     # 1. Handle prefill / Edit Button logic first
     if st.session_state.get("prefill_prompt"):
-        prompt = st.session_state.prefill_prompt
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        st.session_state.prefill_prompt = None
-        
-        # Format history
-        history_msgs = st.session_state.messages[:-1] 
-        formatted_history = "\n".join([f"[{msg['role'].upper()}]: {msg['content']}" for msg in history_msgs])
-        
-        # Initialize background state
-        st.session_state.generation_chunks = []
-        st.session_state.generation_status = {"status": "pending", "stop_requested": False}
-        st.session_state.is_generating = True
-        
-        # Start background thread
-        t = threading.Thread(
-            target=background_query_runner,
-            args=(
-                st.session_state.active_repo,
-                prompt,
-                4096,
-                st.session_state.target_path,
-                formatted_history,
-                st.session_state.generation_chunks,
-                st.session_state.generation_status
-            ),
-            daemon=True
-        )
-        t.start()
-        st.rerun()
+        st.info("✏️ Edit your prompt below:")
+        edited_prompt = st.text_area("Your Prompt", value=st.session_state.prefill_prompt, height=100, key="edit_prompt_area")
+        col_btn1, col_btn2 = st.columns([0.15, 0.85])
+        with col_btn1:
+            if st.button("🚀 Resend", width="stretch", key="resend_edit_btn"):
+                st.session_state.messages.append({"role": "user", "content": edited_prompt})
+                st.session_state.prefill_prompt = None
+                st.session_state.latest_telemetry = None
+                
+                # Format history
+                history_msgs = st.session_state.messages[:-1] 
+                formatted_history = "\n".join([f"[{msg['role'].upper()}]: {msg['content']}" for msg in history_msgs])
+                
+                # Initialize background state
+                st.session_state.generation_chunks = []
+                st.session_state.generation_status = {"status": "pending", "stop_requested": False}
+                st.session_state.is_generating = True
+                
+                # Start background thread
+                t = threading.Thread(
+                    target=background_query_runner,
+                    args=(
+                        st.session_state.active_repo,
+                        edited_prompt,
+                        4096,
+                        st.session_state.target_path,
+                        formatted_history,
+                        st.session_state.generation_chunks,
+                        st.session_state.generation_status
+                    ),
+                    daemon=True
+                )
+                t.start()
+                st.rerun()
+        with col_btn2:
+            if st.button("❌ Cancel", width="stretch", key="cancel_edit_btn"):
+                # Put original user message back before resetting to avoid loss of history
+                st.session_state.messages.append({"role": "user", "content": st.session_state.prefill_prompt})
+                st.session_state.prefill_prompt = None
+                st.rerun()
 
     if st.session_state.get("interruption_message"):
         st.session_state.messages.append({
@@ -566,9 +586,10 @@ if st.session_state.view_mode == "💬 AI Assistant":
                 # The on_click callback saves the partial text BEFORE Streamlit reruns
                 st.button("🛑 Stop", key="stop_btn", on_click=stop_generation)
 
-            # Render standard markdown directly without st.empty() to allow React VDOM in-place updates
+            # Render standard markdown via a persistent placeholder to allow React VDOM in-place updates without redraws
+            content_placeholder = st.empty()
             if temp_content:
-                st.markdown(temp_content)
+                content_placeholder.markdown(temp_content)
                 
             if st.session_state.latest_telemetry:
                 render_telemetry_ui(st.session_state.latest_telemetry)
@@ -592,8 +613,9 @@ if st.session_state.view_mode == "💬 AI Assistant":
                 st.rerun()
 
     # 4. CHAT INPUT (Absolute bottom of the script = Absolute bottom of the UI)
-    if prompt := st.chat_input("Ask a question about your codebase..."):
+    if prompt := st.chat_input("Ask a question about your codebase...", disabled=st.session_state.is_generating):
         st.session_state.messages.append({"role": "user", "content": prompt})
+        st.session_state.latest_telemetry = None
         
         # Format history
         history_msgs = st.session_state.messages[:-1] 
@@ -629,20 +651,31 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
     st.markdown("### Codebase Topography")
     st.caption("Explore the semantic relationships. Click any node to open the embedded context inspector and chat sidepanel.")
     
-    layout_style = st.radio(
-        "Select Graph Layout:",
-        ["🌐 Organic (Physics)", "📂 Hierarchical (Tree)"],
-        horizontal=True,
-        key="graph_layout_style_final"
-    )
+    col_layout, col_hierarchy = st.columns(2)
+    with col_layout:
+        layout_style = st.radio(
+            "Select Graph Layout:",
+            ["🌐 Organic (Physics)", "📂 Hierarchical (Tree)"],
+            horizontal=True,
+            key="graph_layout_style_final"
+        )
+    with col_hierarchy:
+        hierarchy_level = st.radio(
+            "Select Clustering Level:",
+            ["Macro-Communities", "Micro-Communities"],
+            horizontal=True,
+            key="graph_hierarchy_level",
+            help="Leiden Clustering Levels:\n- Macro-Communities: Groups code files into broader systems/packages based on high-level dependencies.\n- Micro-Communities: Recursively sub-clusters macro groups into smaller, fine-grained module/class-level groupings. Note: Run ingestion again to calculate hierarchical clustering metadata for your codebase."
+        )
     
-    if st.button("🔄 Render Map", use_container_width=True):
+    if st.button("🔄 Render Map", width="stretch"):
         with st.spinner("Fetching topography from LocalGraph Engine..."):
             try:
                 res = requests.get(
                     f"{API_BASE}/ingest/visualize/{st.session_state.active_repo}",
                     params={"target_path": st.session_state.target_path,
-                            "show_configs": True}
+                            "show_configs": True,
+                            "hierarchy_level": "micro" if hierarchy_level == "Micro-Communities" else "macro"}
                 )
                 
                 if res.status_code == 200:
@@ -650,7 +683,6 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
                     st.session_state.last_graph_data = graph_data 
                     
                     vis_nodes = []
-                    community_counts = {}
                     node_colors = {} 
                     
                     # --- NEW: 35-Color Dark-Mode Optimized Palette ---
@@ -668,14 +700,39 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
                         "#FF8C00", "#1E90FF", "#C71585", "#32CD32", "#DAA520"
                     ]
                     
-                    # 1. Safely Parse Nodes
+                    # 1. Count communities
+                    community_counts = {}
                     for n in graph_data.get("nodes", []):
                         comm_id = str(n.get("group", "0"))
-                        if comm_id not in community_counts:
-                            community_counts[comm_id] = 0
-                        community_counts[comm_id] += 1
+                        community_counts[comm_id] = community_counts.get(comm_id, 0) + 1
                         
-                        color_hex = extended_palette[len(community_counts) % len(extended_palette)]
+                    # 2. Sort communities safely and numerically (handles 0_0, 10_1, etc.)
+                    def safe_community_key(item):
+                        cid = str(item[0])
+                        if "_" in cid:
+                            parts = cid.split("_")
+                            try:
+                                return (0, tuple(int(p) for p in parts))
+                            except ValueError:
+                                pass
+                        
+                        if cid.isdigit():
+                            return (0, (int(cid),))
+                            
+                        # Fallback for string keys
+                        return (1, cid)
+
+                    sorted_communities = sorted(community_counts.items(), key=safe_community_key)
+
+                    # 3. Assign colors to communities based on sorted order
+                    community_colors = {}
+                    for idx, (cid, _) in enumerate(sorted_communities):
+                        community_colors[cid] = extended_palette[idx % len(extended_palette)]
+                    
+                    # 4. Safely Parse Nodes using the assigned community colors
+                    for n in graph_data.get("nodes", []):
+                        comm_id = str(n.get("group", "0"))
+                        color_hex = community_colors.get(comm_id, "#4E79A7")
                         node_colors[n["id"]] = color_hex 
                         
                         vis_nodes.append({
@@ -688,11 +745,12 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
                             "color": {"background": color_hex, "border": color_hex}, 
                             "community": comm_id, 
                             "community_name": f"Community {comm_id}",
+                            "group": comm_id,
                             "_file_type": n.get("type", "unknown"), 
                             "_is_pending": n.get("_is_pending", False)
                         })
                         
-                    # 2. Safely Parse Edges (Absolutely NO "source" or "target" here!)
+                    # 5. Safely Parse Edges (Absolutely NO "source" or "target" here!)
                     vis_edges = []
                     for e in graph_data.get("edges", []):
                         source_id = e.get("from")
@@ -706,20 +764,17 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
                             "from": source_id, 
                             "to": target_id, 
                             "label": e.get("label", ""),
-                            "color": source_color, 
-                            "width": 0.4           
+                            "title": e.get("title", ""),
+                            "color": source_color,
+                            "width": e.get("width", 0.4),
+                            "dashes": e.get("dashes", False),
+                            "arrows": e.get("arrows")
                         })
                         
-                    # 3. Safely Parse Legend (Fixed to prevent string/int comparison crashes)
+                    # 6. Safely Parse Legend using the same community colors
                     vis_legend = []
-                    sorted_communities = sorted(community_counts.items(), key= lambda x: int(x[0].split(" ")[-1]))
-                    # sorted_communities = sorted(
-                    #     community_counts.items(), 
-                    #     key=lambda x: int(x[0]) if str(x[0]).isdigit() else str(x[0])
-                    # )
-                    
                     for cid, count in sorted_communities:
-                        color_hex = extended_palette[len(vis_legend) % len(extended_palette)]
+                        color_hex = community_colors.get(cid, "#4E79A7")
                         vis_legend.append({
                             "cid": cid, 
                             "color": color_hex, 
@@ -752,4 +807,153 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
         render_graph_health_banner(st.session_state.active_repo, layout_context="visualizer")
         st.iframe(st.session_state.saved_graph_html, height=800)
         # components.html(st.session_state.saved_graph_html, height = 800, scrolling=False)
+
+elif st.session_state.view_mode == "🔍 AST Search Explorer":
+    st.markdown("### 🔍 AST Structural Search Explorer")
+    st.caption("Search your codebase using precise structural patterns or pre-built Tree-sitter S-expression queries.")
+    
+    search_type = st.radio(
+        "Search Mode", 
+        ["Graph Metadata Search", "Dynamic Tree-sitter Pattern Search"], 
+        horizontal=True,
+        help="AST (Abstract Syntax Tree) represents source code structure. Choose:\n- Graph Metadata Search: Search the NetworkX database for structural relations (like classes inheriting from BaseModel).\n- Dynamic Tree-sitter Pattern Search: Scan file contents directly on-the-fly using tree-sitter S-expression templates."
+    )
+    
+    if search_type == "Graph Metadata Search":
+        col1, col2 = st.columns(2)
+        with col1:
+            node_type = st.selectbox("Node Type", ["All", "file", "class", "function"], help="Filter structural elements by code representation type.")
+            name_q = st.text_input("Name contains", placeholder="e.g. Ingestion", help="Search for code symbols containing this substring (case-insensitive).")
+        with col2:
+            inherits_q = st.text_input("Inherits from class", placeholder="e.g. BaseModel", help="Find classes that inherit from a specific parent class.")
+            calls_q = st.text_input("Calls symbol", placeholder="e.g. get_logger", help="Find functions/classes that invoke a specific target method or function.")
+            
+        if st.button("Query Graph Structure", width="stretch"):
+            filters = {}
+            if node_type != "All":
+                filters["node_type"] = node_type
+            if name_q:
+                filters["name"] = name_q
+            if inherits_q:
+                filters["inherits"] = inherits_q
+            if calls_q:
+                filters["calls"] = calls_q
+                
+            with st.spinner("Searching NetworkX Graph..."):
+                try:
+                    res = requests.post(f"{API_BASE}/query/search", json={
+                        "repo_name": st.session_state.active_repo,
+                        "target_path": st.session_state.target_path,
+                        "query_type": "graph",
+                        "filters": filters
+                    })
+                    if res.status_code == 200:
+                        results = res.json().get("results", [])
+                        if results:
+                            import pandas as pd
+                            st.success(f"Found {len(results)} matching code nodes!")
+                            
+                            tab1, tab2 = st.tabs(["📊 Quick Grid", "📄 Detailed Summaries"])
+                            
+                            with tab1:
+                                df = pd.DataFrame(results)
+                                
+                                # Display line numbers as empty for file nodes or when zero
+                                if "line_start" in df.columns:
+                                    df["line_start"] = df.apply(lambda r: None if r.get("type") == "file" or r["line_start"] == 0 else r["line_start"], axis=1)
+                                if "line_end" in df.columns:
+                                    df["line_end"] = df.apply(lambda r: None if r.get("type") == "file" or r["line_end"] == 0 else r["line_end"], axis=1)
+                                    
+                                cols_order = ["name", "type", "file_path", "line_start", "line_end", "summary"]
+                                existing_cols = [c for c in cols_order if c in df.columns]
+                                df = df[existing_cols]
+                                
+                                st.dataframe(
+                                    df,
+                                    column_config={
+                                        "name": st.column_config.TextColumn("Symbol Name", width="medium"),
+                                        "type": st.column_config.TextColumn("Type", width="small"),
+                                        "file_path": st.column_config.TextColumn("File Path", width="medium"),
+                                        "line_start": st.column_config.NumberColumn("Start Line", format="%d", width="small"),
+                                        "line_end": st.column_config.NumberColumn("End Line", format="%d", width="small"),
+                                        "summary": st.column_config.TextColumn("Summary", width="large"),
+                                    },
+                                    width="stretch",
+                                    hide_index=True
+                                )
+                                
+                            with tab2:
+                                import os
+                                for idx, item in enumerate(results):
+                                    name = item.get("name", "")
+                                    ntype = item.get("type", "")
+                                    file_path = item.get("file_path", "")
+                                    line_start = item.get("line_start", 0)
+                                    line_end = item.get("line_end", 0)
+                                    summary = item.get("summary", "")
+                                    
+                                    line_info = f"Lines {line_start}-{line_end}" if line_start and line_end else "File Node"
+                                    
+                                    abs_path = os.path.join(st.session_state.target_path, file_path)
+                                    file_url = f"file://{abs_path}"
+                                    if line_start:
+                                        file_url += f"#L{line_start}"
+                                        
+                                    header_emoji = "📁" if ntype == "file" else ("🧩" if ntype == "class" else "⚡")
+                                    display_label = f"{header_emoji} {name} ({file_path}{f':{line_start}' if line_start else ''})"
+                                    
+                                    with st.expander(display_label):
+                                        st.markdown(f"**Type:** `{ntype}` | **Location:** [{file_path}]({file_url}) ({line_info})")
+                                        st.markdown("**Architectural Summary:**")
+                                        st.markdown(summary if summary else "*No summary generated yet.*")
+                        else:
+                            st.info("No nodes match the structural filters.")
+                    else:
+                        st.error(f"Search failed: {res.text}")
+                except Exception as e:
+                    st.error(f"Error connecting to server: {e}")
+                    
+    else:  # Dynamic Tree-sitter Pattern Search
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            lang_ext = st.selectbox("Language / Extension", [".py", ".js", ".ts", ".tsx"], help="Filter scan range to files matching this language extension.")
+            
+            templates = ["Custom S-Expression", "exception_handlers", "decorators", "async_functions", "class_inheritance", "try_catch", "interfaces"]
+            selected_template = st.selectbox("Pattern Template", templates, help="Choose a predefined pattern query or write a custom S-expression query.")
+            
+        with col2:
+            if selected_template == "Custom S-Expression":
+                pattern = st.text_area(
+                    "Tree-sitter S-Expression Query", 
+                    value="(function_definition) @match", 
+                    height=150, 
+                    help="Enter a valid Tree-sitter S-expression (e.g. '(except_clause) @match' to find Python try-except blocks). Must end with a capture tag like @match."
+                )
+            else:
+                pattern = selected_template
+                st.info(f"Using predefined structural template: `{pattern}`")
+                
+        if st.button("Run Tree-sitter Pattern Search", width="stretch"):
+            with st.spinner("Scanning files on-the-fly via Tree-sitter..."):
+                try:
+                    res = requests.post(f"{API_BASE}/query/search", json={
+                        "repo_name": st.session_state.active_repo,
+                        "target_path": st.session_state.target_path,
+                        "query_type": "tree-sitter",
+                        "pattern": pattern,
+                        "language_ext": lang_ext
+                    })
+                    if res.status_code == 200:
+                        results = res.json().get("results", [])
+                        if results:
+                            st.success(f"Found {len(results)} occurrences across the codebase!")
+                            for idx, match in enumerate(results):
+                                with st.expander(f"📄 {match['file_path']} (Lines {match['start_line']}-{match['end_line']})"):
+                                    st.code(match['snippet'], language=lang_ext[1:])
+                        else:
+                            st.info("No occurrences found matching the pattern.")
+                    else:
+                        st.error(f"Search failed: {res.text}")
+                except Exception as e:
+                    st.error(f"Error connecting to server: {e}")
         

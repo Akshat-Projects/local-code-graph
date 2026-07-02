@@ -1,3 +1,7 @@
+"""
+Check if the FastAPI backend is up or not.
+"""
+
 from fastapi import APIRouter
 
 from config import settings

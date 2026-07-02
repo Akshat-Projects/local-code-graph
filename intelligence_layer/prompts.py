@@ -1,3 +1,8 @@
+"""
+Centralizes all prompts used by the local Graph-RAG system, including AST analysis prompts, 
+Graph RAG prompts, routing/intent classification prompts, keyword extraction, and node-level chat prompts.
+"""
+
 import json
 from models.llm_output import ModuleAnalysis
 
@@ -19,7 +24,8 @@ Read the provided source code module, summarize its operational logic, and extra
    - If a dependency is in the list, extract it.
    - If it is NOT in the list (e.g., `os`, `numpy`), IGNORE IT.
 3. RELATION TYPE: Strictly categorize as `calls`, `instantiates`, or `inherits`.
-4. Append a list of 5-7 important keywords/tags that will be useful for semantic vector search. 
+4. CONFIDENCE SCORE: Estimate your confidence_score for the inferred dependency relation as a float between 0.0 and 1.0 (where 1.0 is high confidence, and below 0.5 indicates uncertainty).
+5. Append a list of 5-7 important keywords/tags that will be useful for semantic vector search. 
    CRITICAL: You MUST explicitly include the exact names of major algorithms, libraries, or specific technical functions used in this file (e.g., cv2.HoughCircles, SQLAlchemy, Regex patterns).
 
 ### OUTPUT FORMAT:
@@ -40,21 +46,6 @@ RAW CODE:
 {{{{$raw_code}}}}
 """
 
-# GRAPH_RAG_PROMPT = """
-# You are a Senior Principal Software Engineer. You have been given a semantic graph map and the raw source code of the most relevant files in the user's repository.
-
-# Context Information:
-# {{$graph_context}}
-
-# User Query:
-# {{$user_query}}
-
-# Instructions:
-# 1. Act as an active developer, not just a documentation reader.
-# 2. If the user asks for existing code, find it in the "Relevant Raw Source Code" section and provide it in markdown blocks.
-# 3. If the user asks you to write NEW code, modify existing code, or implement a requirement, DO IT. Use the provided context to ensure your new code seamlessly integrates with their existing architecture.
-# 4. Always explain your logic briefly before writing the code. Be concise.
-# """
 GRAPH_RAG_PROMPT = """You are an expert Principal Software Engineer. 
 Your job is to answer questions about the codebase based STRICTLY on the provided context.
 
@@ -78,7 +69,6 @@ FORMATTING RULE:
    - Do not summarize code inside comments if the user asked to see the code snippet; provide the actual code lines found in the context.
 """
 
-# The prompt is now much simpler. We don't force the graph context in advance.
 AGENT_PROMPT = """You are a Principal Software Engineer assistant.
 You have access to a tool called `search_codebase`. 
 
@@ -92,3 +82,91 @@ Chat History:
 
 User: {{$user_query}}
 """
+
+KEYWORD_EXTRACTION_PROMPT = """You are an expert search query analyzer for a software codebase.
+Your job is to extract only the specific code symbols, class names, function names, variable names, library/framework names, or file names from the user's input query.
+These symbols will be used for ripgrep and literal matching search.
+DO NOT extract generic conversational verbs or nouns (such as 'compare', 'show', 'snippet', 'code', 'function', 'class', 'explain', 'where', 'used', 'iterations', 'what', 'will', 'break', 'remove', 'tell', 'give', 'me', 'how').
+
+Format your response as a raw JSON list of strings. Do not include markdown code block ticks or any other commentary.
+
+Query: "Give me a code snippet of houghcircle."
+Output: ["houghcircle"]
+
+Query: "Tell me where networkx has been used and also, can you give me code on datanormalizer?"
+Output: ["networkx", "datanormalizer"]
+
+Query: "Can you compare the iterations of the functions in blood_v1.py"
+Output: ["blood_v1.py"]
+
+Query: "If I remove ast_parser.py, what will break?"
+Output: ["ast_parser.py"]
+
+Query: "{{$user_query}}"
+Output:"""
+
+COMPONENT_CHAT_PROMPT = """You are an expert software architect analyzing a specific codebase component.
+
+Component Name: {{$node_id}}
+Component Type: {{$node_type}}
+Component Summary: {{$summary}}
+Relevant Code:
+{{$raw_code}}
+
+The user has a question specifically about this component:
+"{{$question}}"
+
+Provide a clear, concise, and highly technical answer based ONLY on the context provided above.
+"""
+
+ROUTER_SYSTEM_PROMPT = """You are an elite, high-speed routing engine for a local repository AI assistant.
+Your sole job is to classify the user's latest input into one of two routing destinations:
+
+1. 'CONVERSATIONAL': Choose this ONLY if the user is greeting you, making small talk, or asking meta-questions about the chat history itself (e.g., "What did I just ask?").
+2. 'CODEBASE': Choose this for anything else. 
+**CRITICAL OVERRIDE:** If the user asks an explanatory question like "How does X work?", "Why do we use Y?", "Why this doesn't work?", or requests code/snippets (e.g. "Can you fetch code snippet of it?"), you MUST route to CODEBASE.
+
+---
+FEW-SHOT EXAMPLES:
+
+Input: "Hi there" -> Destination: CONVERSATIONAL
+Input: "What questions did I ask you so far?" -> Destination: CONVERSATIONAL
+Input: "Can you tell what advantage Data Normalizer did provide?" -> Destination: CODEBASE
+Input: "Why are we using a median blur here?" -> Destination: CODEBASE
+Input: "process_data_frame" -> Destination: CODEBASE
+Input: "thanks for the help" -> Destination: CONVERSATIONAL
+Input: "where is the threshold setting?" -> Destination: CODEBASE
+Input: "Can you fetch code snippet of it?" -> Destination: CODEBASE
+---
+
+Respond with EXACTLY one word, either 'CONVERSATIONAL' or 'CODEBASE'. Do not include punctuation or markdown.
+"""
+
+ROUTER_PROMPT = ROUTER_SYSTEM_PROMPT + "\n\nChat History:\n{{$chat_history}}\n\nLatest Input: {{$user_query}}\n\nDestination:"
+
+CONSOLIDATION_PROMPT = """Given the following conversation history and a follow-up query, rewrite the follow-up query to be a standalone search query that contains all necessary context (like class/function/variable names, topics, or terms referred to by pronouns). Do not answer the query, just rewrite it.
+
+Conversation History:
+{{$chat_history}}
+
+Follow-up Query: {{$query}}
+
+Standalone Search Query:"""
+
+STANDARD_CODE_ANALYSIS_PROMPT = """You are a Senior Software Architect. Read the following Python file and write
+a highly concise, 2-3 sentence summary of its overarching purpose, what it is responsible for,
+and its role in the broader architecture. Do NOT output JSON, just the raw text summary.
+
+File: {{$file_path}}
+Code:
+{{$raw_code}}"""
+
+SPAGHETTI_CODE_ANALYSIS_PROMPT = """You are a Senior Software Architect analyzing an unstructured, procedural script.
+Read the following Python file and write a highly concise, 2-3 sentence summary of its 
+execution flow, core data transformations, and side-effects. 
+Append a list of 5-7 important keywords/tags that will be useful for semantic vector search.
+Do NOT output JSON, just the raw text summary.
+
+File: {{$file_path}}
+Code:
+{{$raw_code}}"""

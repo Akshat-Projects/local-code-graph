@@ -1,3 +1,8 @@
+"""
+Provides in-memory caching for loading NetworkX GraphML codebase databases,
+checking file modification times (mtime) to avoid redundant filesystem reads.
+"""
+
 import os
 import asyncio
 import networkx as nx
@@ -23,7 +28,8 @@ async def load_graph_cached(graph_path: str | os.PathLike) -> nx.MultiDiGraph:
         or GRAPH_MTIME[graph_path_str] != current_mtime
     ):
         logger.info(f"Reloading graph cache for {graph_path_str}...")
-        G = await asyncio.to_thread(nx.read_graphml, graph_path_str, node_type=str)
+        G_raw = await asyncio.to_thread(nx.read_graphml, graph_path_str, node_type=str)
+        G = nx.MultiDiGraph(G_raw)
         GRAPH_CACHE[graph_path_str] = G
         GRAPH_MTIME[graph_path_str] = current_mtime
         

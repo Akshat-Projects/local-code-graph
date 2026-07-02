@@ -1,3 +1,7 @@
+"""
+Defines commented template stubs for LangChain structural tools and search functions.
+"""
+
 # from langchain_core.tools import tool
 # from intelligence_layer.query_engine import GraphQueryEngine
 

@@ -1,3 +1,8 @@
+"""
+Compiles the primary LangGraph StateGraph workflow, orchestrating conditional routing edges
+between supervisors, codebase agents, synthesizers, and small talk nodes.
+"""
+
 from langgraph.graph import StateGraph, END
 from agents.state import GraphRAGState
 from agents.nodes import router_node, graph_agent_node, synthesizer_node, conversational_node
