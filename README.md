@@ -49,7 +49,7 @@ This project started as a local Graph-RAG (Retrieval-Augmented Generation) exper
 ### Ingestion (without LLM)
 ![IngestionGraph](assets/Ingestion-GraphOnly.gif)
 ### Ingestion (with LLM summarization)
-*This takes time when LLM is locally hosted*
+*This takes time when LLM is locally hosted, this will be optimized more for speed if possible.*
 ![IngestionLLM](assets/Ingestion-LLMsummarized.gif)
 
 ---
@@ -312,3 +312,4 @@ If you're exploring this space, graphify is well worth a look in its own right.
 3. CLI based run for usage.
 4. Multi-modal processing for e.g. PDFs, audio files, .mds etc.
 5. Online search agent.
+6. Fine-grained, AST-level incremental caching (avoiding LLM re-summarization of unchanged functions/classes inside modified source files).

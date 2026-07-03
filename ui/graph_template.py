@@ -421,7 +421,7 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         const updates = RAW_NODES.map(n => {
             let isHidden = hiddenCommunities.has(n.community);
             const fileType = n._file_type || '';
-            const isConfig = fileType === 'library' || fileType === 'infrastructure' || (fileType === 'file' && n.label.match(/\.(json|yaml|yml|toml|txt)$/i));
+            const isConfig = fileType === 'library' || fileType === 'infrastructure' || (fileType === 'file' && n.label.match(/\\.(json|yaml|yml|toml|txt)$/i));
             
             if (!showConfigs && isConfig) isHidden = true;
             if (visibleSet && !visibleSet.has(n.id)) isHidden = true;
@@ -509,11 +509,16 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         ? `<div style="background: rgba(242, 142, 43, 0.1); border: 1px solid #F28E2B; color: #F28E2B; padding: 6px; border-radius: 4px; margin-bottom: 8px; font-weight: bold; font-size: 11px;">⚠️ Pending LLM Summarization</div>` 
         : '';
 
+        const summaryHtml = n._is_pending
+            ? ''
+            : `<div class="field" style="margin-top: 10px;"><b>Summary:</b><br><span style="font-size:12px;color:#cbd5e0;line-height:1.4;display:block;margin-top:4px;white-space:pre-wrap;">${esc(n.title || 'No summary available.')}</span></div>`;
+
         document.getElementById('info-content').innerHTML = `
         ${pendingWarning}
         <div class="field"><b>${esc(n.label)}</b></div>
         <div class="field">Type: ${esc(n._file_type || 'unknown')}</div>
         <div class="field">Community: ${esc(n._community_name)}</div>
+        ${summaryHtml}
         ${neighborIds.length ? `<div class="field" style="margin-top:8px;color:#aaa;font-size:11px">Neighbors (${neighborIds.length})<br><span style="font-size: 10px; color: #666; font-style: italic;">*In 3D mode, Right-Click + Drag to Pan*</span></div><div id="neighbors-list">${neighborItems}</div>` : ''}
         `;
     }

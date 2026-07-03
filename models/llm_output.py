@@ -42,6 +42,10 @@ class NodeAnalysis(BaseModel):
     )
 
 class ModuleAnalysis(BaseModel):
+    file_summary: str = Field(
+        ...,
+        description="Concise 2-3 sentence overarching summary of the file and its architectural role."
+    )
     analyzed_nodes: List[NodeAnalysis] = Field(
         ...,
         description="The array of analyzed functions and classes for the module."

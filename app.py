@@ -394,7 +394,10 @@ def render_graph_health_banner(repo_name: str, layout_context: str = "visualizer
     if not repo_name or not repo_name.strip():
         return False
     try:
-        res = requests.get(f"{API_BASE}/query/status/{repo_name}")
+        res = requests.get(
+            f"{API_BASE}/query/status/{repo_name}",
+            params={"target_path": st.session_state.target_path}
+        )
         if res.status_code == 200:
             status = res.json()
             if not status.get("exists"):
@@ -403,8 +406,10 @@ def render_graph_health_banner(repo_name: str, layout_context: str = "visualizer
                 
             pending = status.get("pending_summaries", 0)
             total = status.get("total_nodes", 0)
+            pending_details = status.get("pending_details", [])
             
             if pending > 0:
+                pending_list_str = "\n".join([f"- `{item['id']}` ({item['type']})" for item in pending_details])
                 if layout_context == "chatbot":
                     st.warning(
                         f"⚠️ **Semantic Index Incomplete ({pending} / {total} nodes pending LLM analysis).**\n\n"
@@ -412,6 +417,8 @@ def render_graph_health_banner(repo_name: str, layout_context: str = "visualizer
                         "Because they are missing, complex or deep semantic queries will likely fail to surface relevant code block contexts. "
                         "Go to **Ingestion** and check *'Run Deep LLM Analysis'* to train the model."
                     )
+                    with st.expander(f"🔍 View Pending Components ({pending})", expanded=False):
+                        st.markdown(pending_list_str)
                 else:
                     # Visualizer specific wording
                     st.warning(
@@ -419,6 +426,8 @@ def render_graph_health_banner(repo_name: str, layout_context: str = "visualizer
                         "The map layout is structurally sound, but elements wrapped in dashed orange borders are currently unindexed. "
                         "Re-running ingestion with the LLM analysis active will safely resume processing missing fragments."
                     )
+                    with st.expander(f"🔍 View Pending Components ({pending})", expanded=False):
+                        st.markdown(pending_list_str)
                 return False
             else:
                 st.success(f"✅ Code Graph is 100% semantically indexed and healthy! ({total}/{total} nodes parsed)")

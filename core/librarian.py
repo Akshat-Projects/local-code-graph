@@ -102,10 +102,66 @@ class Librarian:
         """
         Walks the codebase, filters out non-relevant files, and classifies 
         files into 'modified' (needs parsing) or 'unchanged' states.
+        Also prunes any deleted, renamed, or ignored files/nodes from the graph.
         """
         target_dir = Path(target_repo_path)
         file_manifest = {}
         files_to_scan = valid_files if valid_files is not None else [f for f in target_dir.rglob("*") if f.is_file()]
+
+        # 1. Determine active file nodes based on current files on disk & ignore spec
+        active_file_nodes = set()
+        for file_path in files_to_scan:
+            filename = file_path.name.lower()
+            ext = file_path.suffix.lower()
+            
+            is_supported = ext in AllowedTypes.SUPPORTED_EXTENSIONS
+            is_config = filename in [
+                "package.json", "requirements.txt",
+                "docker-compose.yml", "docker-compose.yaml", "pyproject.toml"
+            ]
+            if is_supported or is_config:
+                rel_path = str(file_path.relative_to(target_dir))
+                active_file_nodes.add(f"file::{rel_path}")
+
+        # 2. Prune deleted/ignored files and their children from the graph
+        existing_file_nodes = [
+            node for node, ndata in self.graph.nodes(data=True) 
+            if ndata.get("type") == "file"
+        ]
+        
+        pruned_count = 0
+        for file_node in existing_file_nodes:
+            if file_node not in active_file_nodes:
+                rel_path = str(file_node).replace("file::", "")
+                
+                # Find all children (classes, functions, etc.) linked to this file
+                children = [
+                    node for node, ndata in self.graph.nodes(data=True)
+                    if ndata.get("file_path") == rel_path
+                ]
+                
+                for child in children:
+                    self.graph.remove_node(child)
+                self.graph.remove_node(file_node)
+                pruned_count += 1
+                
+        if pruned_count > 0:
+            logger.info(f"Pruned {pruned_count} deleted/ignored files and their constituent nodes from the graph.")
+
+        # 3. Prune dangling/zombie nodes (missing/invalid types or missing file_paths)
+        zombie_nodes = []
+        for node, ndata in list(self.graph.nodes(data=True)):
+            ntype = ndata.get("type")
+            if not ntype or ntype not in ["file", "class", "function", "library", "infrastructure"]:
+                zombie_nodes.append(node)
+            elif ntype in ["file", "class", "function"] and not ndata.get("file_path"):
+                zombie_nodes.append(node)
+                
+        for zombie in zombie_nodes:
+            self.graph.remove_node(zombie)
+            
+        if zombie_nodes:
+            logger.info(f"Pruned {len(zombie_nodes)} dangling/zombie nodes from the graph.")
 
         cache_dir = self.storage_dir / "cache"   # scoped to this repo, not the whole workspace
 
@@ -119,7 +175,7 @@ class Librarian:
 
             # Key on path + content, so identical-content files don't collide
             cache_key = hashlib.sha256(f"{relative_path}::{current_hash}".encode()).hexdigest()
-            cache_file = cache_dir / f"v4_{cache_key}.json"
+            cache_file = cache_dir / f"v6_{cache_key}.json"
 
             if cache_file.exists():
                 status = "unchanged"
@@ -184,7 +240,7 @@ class Librarian:
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         cache_key = hashlib.sha256(f"{relative_path}::{file_hash}".encode()).hexdigest()
-        cache_file = cache_dir / f"v4_{cache_key}.json"
+        cache_file = cache_dir / f"v6_{cache_key}.json"
             
         file_node_id = f"file::{relative_path}"
         nodes_to_cache = []

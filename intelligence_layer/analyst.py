@@ -99,67 +99,65 @@ class GraphAnalyst:
         return raw_response
        
        
-    async def _analyze_file_summary(self, batch_data: dict, file_node: str) -> None:
-        """Generates and updates the high-level file summary for architectural context."""
-        file_node_data = self.librarian.graph.nodes.get(file_node, {})
+    def _filter_global_symbols(self, global_symbols: list[str], raw_code: str) -> list[str]:
+        """Filters global symbol list to contain only candidate symbols mentioned inside raw_code."""
+        import re
+        words = set(re.findall(r'\b[a-zA-Z_]\w*\b', raw_code))
         
-        if not file_node_data.get("summary") or file_node_data.get("summary") == "No summary available.":
-            logger.info(f"Generating architectural summary for file: {batch_data['file_path']}")
-            
-            prompt_template = SPAGHETTI_CODE_ANALYSIS_PROMPT if batch_data["is_spaghetti"] else STANDARD_CODE_ANALYSIS_PROMPT
-            
-            arguments = KernelArguments(
-                file_path=batch_data['file_path'],
-                raw_code=batch_data['raw_code']
-            )
-            
-            try:
-                file_result = await self.kernel.invoke_prompt(prompt=prompt_template, arguments=arguments)
-                self.librarian.graph.nodes[file_node]["summary"] = str(file_result).strip()
-                logger.debug(f"File summary successfully generated for {file_node}")
-            except Exception as e:
-                logger.warning(f"Could not generate summary for file {batch_data['file_path']}: {e}")
+        filtered = []
+        for symbol in global_symbols:
+            parts = symbol.split("::")
+            if len(parts) >= 2:
+                # E.g. "path/to/file.py::ClassName::method_name"
+                # Check class or method/function name
+                base_names = parts[1:]
+                if any(name in words for name in base_names):
+                    filtered.append(symbol)
+            else:
+                if symbol in words:
+                    filtered.append(symbol)
+        return filtered
 
-    async def _analyze_node_details(self, batch_data: dict, global_symbols: list[str]) -> None:
-        """Extracts detailed functions/classes summaries and dependencies via structural LLM call."""
+    async def _analyze_module(self, batch_data: dict, global_symbols: list[str]) -> None:
+        """Extracts detailed module file summary, target node summaries, and dependencies via a single LLM call."""
+        file_path = batch_data["file_path"]
+        file_node_id = f"file::{file_path}"
         target_node_ids = batch_data["contained_nodes"]
-        if not target_node_ids:
-            async with self.save_lock:
-                graph_copy = self.librarian.graph.copy()
-                await asyncio.to_thread(self.librarian.save_graph, graph_copy)
-            
-            file_node_id = f"file::{batch_data['file_path']}"
-            file_hash = self.librarian.graph.nodes.get(file_node_id, {}).get("hash", "")
-            if file_hash:
-                self.librarian.write_to_cache(batch_data['file_path'], file_hash)
-            return
+
+        # Run reference pruning on global_symbols for this file's raw_code
+        pruned_symbols = self._filter_global_symbols(global_symbols, batch_data["raw_code"])
 
         arguments = KernelArguments(
             target_nodes=json.dumps(target_node_ids, indent=2),
-            global_symbol_list=json.dumps(global_symbols, indent=2),
+            global_symbol_list=json.dumps(pruned_symbols, indent=2),
             raw_code=batch_data["raw_code"],
             settings=OpenAIChatPromptExecutionSettings(max_tokens=8192)
         )
 
         try:
+            logger.info(f"Generating semantic analysis for module: {file_path}")
             raw_response = await self._invoke_llm_with_retries(arguments)
             self._process_llm_response(raw_response, batch_data)
 
         except ValidationError as e:
-            logger.error(f"Schema Validation Error on {batch_data['file_path']} after retries: {e}")
+            logger.error(f"Schema Validation Error on {file_path} after retries: {e}")
             for node_id in target_node_ids:
                 if node_id in self.librarian.graph:
                    self.librarian.graph.nodes[node_id]["analysis_status"] = "failed_validation"
+            if file_node_id in self.librarian.graph:
+                self.librarian.graph.nodes[file_node_id]["analysis_status"] = "failed_validation"
 
             async with self.save_lock:
                 graph_copy = self.librarian.graph.copy()
                 await asyncio.to_thread(self.librarian.save_graph, graph_copy)
 
         except Exception as e:
-            logger.error(f"Execution Error on {batch_data['file_path']} after retries: {e}")
+            logger.error(f"Execution Error on {file_path} after retries: {e}")
             for node_id in target_node_ids:
                 if node_id in self.librarian.graph:
                     self.librarian.graph.nodes[node_id]["analysis_status"] = "failed_runtime"
+            if file_node_id in self.librarian.graph:
+                self.librarian.graph.nodes[file_node_id]["analysis_status"] = "failed_runtime"
 
             async with self.save_lock:
                 graph_copy = self.librarian.graph.copy()
@@ -171,6 +169,15 @@ class GraphAnalyst:
         parsed_data = ModuleAnalysis.model_validate_json(raw_response)
         logger.info(f"Successfully parsed {len(parsed_data.analyzed_nodes)} nodes for {batch_data['file_path']}.")
         
+        file_path = batch_data["file_path"]
+        file_node_id = f"file::{file_path}"
+        
+        # 1. Update the file-level summary
+        if file_node_id in self.librarian.graph:
+            self.librarian.graph.nodes[file_node_id]["summary"] = parsed_data.file_summary
+            self.librarian.graph.nodes[file_node_id]["analysis_status"] = "complete"
+
+        # 2. Update target nodes
         target_node_ids = batch_data["contained_nodes"]
         processed_nodes = set()
         for node_data in parsed_data.analyzed_nodes:
@@ -205,23 +212,23 @@ class GraphAnalyst:
                         )
 
         omitted_nodes = set(target_node_ids) - processed_nodes
-        logger.info(
-            f"[DIAG Ingest] File: {batch_data['file_path']} | "
-            f"Target Nodes: {target_node_ids} | "
-            f"Returned Nodes: {list(processed_nodes)} | "
-            f"Raw Response: {raw_response}"
-        )
-        for missing_id in omitted_nodes:
-            if missing_id in self.librarian.graph:
-                self.librarian.graph.nodes[missing_id]["analysis_status"] = "failed_validation"
-                logger.warning(f"LLM omitted {missing_id}. Marked for retry.")
+        if omitted_nodes:
+            logger.info(
+                f"[DIAG Ingest] File: {batch_data['file_path']} | "
+                f"Target Nodes: {target_node_ids} | "
+                f"Returned Nodes: {list(processed_nodes)} | "
+                f"Raw Response: {raw_response}"
+            )
+            for missing_id in omitted_nodes:
+                if missing_id in self.librarian.graph:
+                    self.librarian.graph.nodes[missing_id]["analysis_status"] = "failed_validation"
+                    logger.warning(f"LLM omitted {missing_id}. Marked for retry.")
 
         async def save_pipeline():
             async with self.save_lock:
                 graph_copy = self.librarian.graph.copy()
                 await asyncio.to_thread(self.librarian.save_graph, graph_copy)
 
-            file_node_id = f"file::{batch_data['file_path']}"
             file_hash = self.librarian.graph.nodes.get(file_node_id, {}).get("hash", "")
             if file_hash:
                 file_nodes = [
@@ -257,14 +264,26 @@ class GraphAnalyst:
             logger.info("No modules found to analyze. Graph is up to date.")
             return
 
+        # Concurrency resolution (Dynamic vs. Configured Limit)
+        concurrency = settings.MAX_CONCURRENT_INGESTION_TASKS
+        if concurrency is None:
+            endpoint = settings.MODEL_ENDPOINT.lower()
+            if any(local_host in endpoint for local_host in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                concurrency = 4
+                logger.info("Local deployment detected. Defaulting concurrency semaphore to 4.")
+            else:
+                concurrency = 15
+                logger.info("Cloud deployment detected. Defaulting concurrency semaphore to 15.")
+        else:
+            logger.info(f"Using user-configured concurrency limit: {concurrency}")
+
         total_batches = len(batches)
         completed_batches = 0
         progress_lock = asyncio.Lock()
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(concurrency)
 
         async def analyze_single_batch(batch_key, batch_data):
             nonlocal completed_batches
-            file_node = batch_key.split("::chunk_")[0]
             if progress_callback:
                 progress_callback(
                     completed_batches, 
@@ -274,11 +293,8 @@ class GraphAnalyst:
             async with sem:
                 logger.info(f"Analyzing Module: {batch_data['file_path']}")
                 
-                # Phase A: File summary overview
-                await self._analyze_file_summary(batch_data, file_node)
-                
-                # Phase B: Detailed AST node functions/classes and dependencies
-                await self._analyze_node_details(batch_data, global_symbols)
+                # Combined LLM Module Analysis (overarching summary + node details)
+                await self._analyze_module(batch_data, global_symbols)
                 
                 async with progress_lock:
                     completed_batches += 1

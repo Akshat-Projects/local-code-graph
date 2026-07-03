@@ -461,6 +461,22 @@ class UniversalParser:
                 registered_ranges[class_id] = (body_node.start_byte, body_node.end_byte)
 
             elif capture_name == "function":
+                # Skip nested/inner functions to prevent graph noise and LLM omission warnings.
+                # The captured `node` is the name identifier, so its parent is the function definition node.
+                # We start checking parent scopes from `node.parent.parent`.
+                curr = node.parent.parent if node.parent else None
+                is_nested_func = False
+                while curr is not None:
+                    if curr.type in [
+                        "function_definition", "function_declaration", "method_definition",
+                        "function_item", "method_declaration", "method", "arrow_function"
+                    ]:
+                        is_nested_func = True
+                        break
+                    curr = curr.parent
+                if is_nested_func:
+                    continue
+
                 parent_class_id = None
                 for cls_name, cls_data in classes.items():
                     if self._is_descendant(node, cls_data["ts_node"]):

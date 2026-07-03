@@ -15,3 +15,8 @@ public/images/
 # Auto-generated documentation
 docs/build/
 site/
+
+# Ingestion telemetry files
+stats.log
+stats.lock
+*.log

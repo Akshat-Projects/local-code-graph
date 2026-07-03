@@ -20,7 +20,7 @@ from core.universal_parser import UniversalParser
 from core.vector_operations import HybridVectorStore
 from models.request import IngestRequest, JobStatusResponse
 from intelligence_layer.analyst import GraphAnalyst
-from utils.helper import validate_ingestion_path
+from utils.helper import validate_ingestion_path, log_ingestion_stats
 from utils.global_cache import load_graph_cached
 from utils.constants import SecurityConstraints
 from utils.helper import get_ignore_spec
@@ -204,13 +204,18 @@ async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str
     target_dir = Path(target_path)
     ignore_spec = get_ignore_spec(target_dir)
     
+    import time
+    t_start = time.perf_counter()
+    
     try:
         # 1. Gather all files in scope
         valid_files = _gather_valid_files(target_dir, ignore_spec)
         
-        # 2. Phase 1: Static AST Parsing
+        # 2. Phase 1: Static AST Parsing (Graph extraction)
+        t_ast_start = time.perf_counter()
         librarian = Librarian(workspace_root=".", repo_name=repo_name)
         modified_files = await asyncio.to_thread(_execute_ast_parsing, librarian, target_path, valid_files)
+        duration_ast = time.perf_counter() - t_ast_start
         
         # --- UI CONNECTION: The Streamlit Progress Callback ---
         def update_ui_progress(current: int, total: int, status_message: str):
@@ -221,14 +226,19 @@ async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str
                 "current_file": status_message
             }
             
-        # 3. Phase 2: LLM semantic parsing
+        # 3. Phase 2: LLM semantic parsing (LLM)
+        t_llm_start = time.perf_counter()
         await _execute_llm_analysis(req, librarian, target_path, modified_files, job_id, update_ui_progress)
+        duration_llm = time.perf_counter() - t_llm_start
         
-        # 4. Phase 3: Community topological calculations
+        # 4. Phase 3 & 4: Everything else (Community detection + Vector indexing)
+        t_else_start = time.perf_counter()
         await _calculate_topography(librarian, update_ui_progress)
-        
-        # 5. Phase 4: Vector index builds
         await _build_vector_indexes(librarian, repo_name, update_ui_progress)
+        duration_else = (time.perf_counter() - t_else_start) + (t_ast_start - t_start)
+        
+        # Log stats directly to standard application logs
+        log_ingestion_stats(repo_name, duration_ast, duration_llm, duration_else)
         
         # Ingestion Success status
         JOB_STORE[job_id] = {
