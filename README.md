@@ -49,6 +49,7 @@ This project started as a local Graph-RAG (Retrieval-Augmented Generation) exper
 ### Ingestion (without LLM)
 ![IngestionGraph](assets/Ingestion-GraphOnly.gif)
 ### Ingestion (with LLM summarization)
+*This takes time when LLM is locally hosted*
 ![IngestionLLM](assets/Ingestion-LLMsummarized.gif)
 
 ---
