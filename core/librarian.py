@@ -148,21 +148,6 @@ class Librarian:
         if pruned_count > 0:
             logger.info(f"Pruned {pruned_count} deleted/ignored files and their constituent nodes from the graph.")
 
-        # 3. Prune dangling/zombie nodes (missing/invalid types or missing file_paths)
-        zombie_nodes = []
-        for node, ndata in list(self.graph.nodes(data=True)):
-            ntype = ndata.get("type")
-            if not ntype or ntype not in ["file", "class", "function", "library", "infrastructure"]:
-                zombie_nodes.append(node)
-            elif ntype in ["file", "class", "function"] and not ndata.get("file_path"):
-                zombie_nodes.append(node)
-                
-        for zombie in zombie_nodes:
-            self.graph.remove_node(zombie)
-            
-        if zombie_nodes:
-            logger.info(f"Pruned {len(zombie_nodes)} dangling/zombie nodes from the graph.")
-
         cache_dir = self.storage_dir / "cache"   # scoped to this repo, not the whole workspace
 
         for file_path in files_to_scan:
@@ -188,6 +173,21 @@ class Librarian:
                 "hash": current_hash,
                 "status": status,
             }
+
+        # 3. Prune dangling/zombie nodes (missing/invalid types or missing file_paths)
+        zombie_nodes = []
+        for node, ndata in list(self.graph.nodes(data=True)):
+            ntype = ndata.get("type")
+            if not ntype or ntype not in ["file", "class", "function", "library", "infrastructure"]:
+                zombie_nodes.append(node)
+            elif ntype in ["file", "class", "function"] and not ndata.get("file_path"):
+                zombie_nodes.append(node)
+                
+        for zombie in zombie_nodes:
+            self.graph.remove_node(zombie)
+            
+        if zombie_nodes:
+            logger.info(f"Pruned {len(zombie_nodes)} dangling/zombie nodes from the graph.")
 
         return file_manifest
 

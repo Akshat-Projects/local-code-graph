@@ -748,6 +748,7 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
                             "id": n["id"], 
                             "label": n.get("label", ""), 
                             "title": n.get("title", ""),
+                            "summary": n.get("summary", ""),
                             "size": n.get("size", 10), 
                             "shape": n.get("shape", "dot"), 
                             "font": n.get("font"),

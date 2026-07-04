@@ -20,11 +20,13 @@ You can then **search it, visualize it, and chat with it**. Turning on LLM enric
 flowchart LR
     A[📂 Point it at your codebase] --> B["🧩 Local-Code-Graph builds a map<br/>fast, offline, no cloud calls"]
     B --> C{Want deeper understanding?}
-    C -->|Stay 100% offline| D["🔍 Explore, search & visualize your code"]
+    C -->|Stay offline| D["🔍 Explore, search & visualize your code"]
     C -->|Turn on LLM enrichment| E["🧠 LLM adds summaries & smart connections"]
     E --> D
     D --> F[💬 Chat with and browse your codebase]
 ```
+*LLM enrichment is available through local inference with Llama.cpp and cloud models too*
+
 
 ### Where this is headed
 

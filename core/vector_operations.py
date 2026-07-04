@@ -49,11 +49,14 @@ class HybridVectorStore:
         self.faiss_path = os.path.join(self.persist_dir, "dense.index")
         self.metadata_path = os.path.join(self.persist_dir, "metadata.json")
         self.bm25_dir = os.path.join(self.persist_dir, "bm25")
+        self.cache_path = os.path.join(self.persist_dir, "embeddings_cache.json")
         
         self.index = None          
         self.bm25_retriever = None 
         self.metadata = []         
+        self.embeddings_cache = {}
         
+        self._load_cache()
         self._load_indices()
 
     def _load_indices(self):
@@ -95,53 +98,95 @@ class HybridVectorStore:
         sorted_fused = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
         return sorted_fused
 
+    def _load_cache(self):
+        if os.path.exists(self.cache_path):
+            try:
+                with open(self.cache_path, "r", encoding="utf-8") as f:
+                    self.embeddings_cache = json.load(f)
+                logger.info(f"Loaded {len(self.embeddings_cache)} cached embeddings.")
+            except Exception as e:
+                logger.warning(f"Failed to load embedding cache: {e}")
+
+    def _save_cache(self):
+        try:
+            with open(self.cache_path, "w", encoding="utf-8") as f:
+                json.dump(self.embeddings_cache, f)
+        except Exception as e:
+            logger.warning(f"Failed to save embedding cache: {e}")
+
     def build_indexes(self, nodes_data: List[Dict]):
         if not nodes_data:
             return
             
+        import hashlib
         self.metadata = []
         texts_for_bm25 = []
-        dense_documents = []
+        
+        # Prepare list of embeddings
+        embeddings_list = []
+        
+        # Find which nodes need calculation
+        nodes_to_calculate = []
+        docs_to_calculate = []
         
         for data in nodes_data:
+            node_id = data["node_id"]
             summary = data.get("summary", "")
             if not summary or summary == "No summary available.":
                 continue
                 
-            self.metadata.append({"node_id": data["node_id"]})
-            # With:
+            self.metadata.append({"node_id": node_id})
+            
+            # BM25 token prep
             api_calls_str = data.get("api_calls", "")
             if api_calls_str:
-                # Append literal call names to BM25 corpus only.
-                # FAISS stays purely semantic (summary only).
-                # This lets BM25 exact-match "HoughCircles" even if the
-                # LLM summary paraphrased it as "circle detection".
                 bm25_text = f"{summary} {api_calls_str.replace(',', ' ')}"
             else:
                 bm25_text = summary
             texts_for_bm25.append(bm25_text)
-                        
-            # Asymmetric Document Format
-            formatted_doc = f"title: {data['node_id']} | text: {summary}"
-            dense_documents.append(formatted_doc)
             
-        if not dense_documents:
+            # Cache check
+            summary_hash = hashlib.sha256(summary.encode("utf-8")).hexdigest()
+            cached = self.embeddings_cache.get(node_id)
+            if cached and cached.get("hash") == summary_hash:
+                embeddings_list.append((node_id, np.array(cached["embedding"], dtype=np.float32)))
+            else:
+                # Need calculation
+                formatted_doc = f"title: {node_id} | text: {summary}"
+                nodes_to_calculate.append((node_id, summary_hash))
+                docs_to_calculate.append(formatted_doc)
+                
+        # Calculate missing embeddings
+        if docs_to_calculate:
+            logger.info(f"Calculating {len(docs_to_calculate)} new or modified embeddings...")
+            response = self.encoder.create_embedding(docs_to_calculate)
+            
+            for i, (node_id, summary_hash) in enumerate(nodes_to_calculate):
+                emb_vector = response["data"][i]["embedding"]
+                
+                # Update cache
+                self.embeddings_cache[node_id] = {
+                    "hash": summary_hash,
+                    "embedding": emb_vector
+                }
+                embeddings_list.append((node_id, np.array(emb_vector, dtype=np.float32)))
+                
+            self._save_cache()
+            
+        if not embeddings_list:
             return
-
-        # --- THE LITE-WEIGHT ENCODE ---
-        response = self.encoder.create_embedding(dense_documents)
+            
+        # Reconstruct embeddings array in the order of metadata
+        emb_map = {node_id: emb for node_id, emb in embeddings_list}
+        ordered_embeddings = np.array([emb_map[m["node_id"]] for m in self.metadata], dtype=np.float32)
         
-        # Extract the native 768-dimension vectors into a float32 array
-        embeddings = np.array([item["embedding"] for item in response["data"]], dtype=np.float32)
-
-        # --- MANUAL MATRYOSHKA TRUNCATION ---
-        # We simply chop off the end of the array to get our 256 dimensions!
-        embeddings = embeddings[:, :self.dimension] 
-        embeddings = np.ascontiguousarray(embeddings[:, :self.dimension], dtype=np.float32)
+        # Truncate
+        ordered_embeddings = ordered_embeddings[:, :self.dimension]
+        ordered_embeddings = np.ascontiguousarray(ordered_embeddings[:, :self.dimension], dtype=np.float32)
         
-        faiss.normalize_L2(embeddings)
+        faiss.normalize_L2(ordered_embeddings)
         self.index = faiss.IndexFlatL2(self.dimension)
-        self.index.add(embeddings)
+        self.index.add(ordered_embeddings)
         
         faiss.write_index(self.index, self.faiss_path)
         with open(self.metadata_path, "w") as f:

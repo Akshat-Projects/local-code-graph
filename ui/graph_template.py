@@ -48,7 +48,7 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         #graph { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
         #graph-3d { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; }
         
-        #sidebar { width: 280px; background: #1a1a2e; border-left: 1px solid #2a2a4e; display: flex; flex-direction: column; overflow: hidden; z-index: 10; }
+        #sidebar { width: 280px; background: #1a1a2e; border-left: 1px solid #2a2a4e; display: flex; flex-direction: column; overflow-y: auto; z-index: 10; }
         #search-wrap { padding: 12px; border-bottom: 1px solid #2a2a4e; }
         #search { width: 100%; background: #0f0f1a; border: 1px solid #3a3a5e; color: #e0e0e0; padding: 7px 10px; border-radius: 6px; font-size: 13px; outline: none; margin-bottom: 8px; }
         #search:focus { border-color: #4E79A7; }
@@ -75,7 +75,7 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         .neighbor-link { display: block; padding: 2px 6px; margin: 2px 0; border-radius: 3px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid #333; }
         .neighbor-link:hover { background: #2a2a4e; }
         #neighbors-list { max-height: 160px; overflow-y: auto; margin-top: 4px; }
-        #legend-wrap { flex: 1; overflow-y: auto; padding: 12px; }
+        #legend-wrap { flex: none; padding: 12px; }
         #legend-wrap h3 { font-size: 13px; color: #aaa; margin-bottom: 10px; text-transform: uppercase; }
         .legend-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; border-radius: 4px; font-size: 12px; }
         .legend-item:hover { background: #2a2a4e; padding-left: 4px; }
@@ -92,22 +92,116 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         #select-all-cb:indeterminate { background: #4E79A7; border-color: #4E79A7; }
         #select-all-cb:indeterminate::after { content: ''; position: absolute; left: 2px; top: 5px; width: 8px; height: 2px; background: #fff; border: none; transform: none; }
 
-        #node-chat-wrap { display: none; padding: 14px; border-bottom: 1px solid #2a2a4e; flex-direction: column; gap: 8px; background: #1a1a2e; transition: all 0.2s ease; }
-        #node-chat-wrap.popped-out { position: absolute; top: 20px; left: 20px; width: 360px; height: 480px; max-height: 80vh; border: 1px solid #4E79A7; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); z-index: 999; }
-        #node-chat-wrap.popped-out #node-chat-history { max-height: calc(100% - 65px) !important; flex-grow: 1; }
+        #node-chat-section {
+            display: none;
+            flex-direction: column;
+        }
+        #node-chat-section.popped-out {
+            position: absolute !important;
+            top: 20px;
+            left: 20px;
+            width: 360px;
+            height: 480px;
+            max-height: 80vh;
+            border: 1px solid #4E79A7;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+            z-index: 999;
+            background: #1a1a2e;
+            display: flex !important;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #node-chat-section.popped-out #node-chat-content {
+            flex: 1 !important;
+            height: calc(100% - 38px) !important;
+            display: flex !important;
+            flex-direction: column;
+            border-bottom: none;
+            padding: 14px;
+        }
+        #node-chat-section.popped-out #node-chat-history {
+            max-height: none !important;
+            flex: 1 !important;
+            overflow-y: auto;
+        }
         .chat-header-container { display: flex; justify-content: space-between; align-items: center; }
         .popout-btn { background: transparent; border: none; color: #aaa; cursor: pointer; font-size: 14px; display: flex; align-items: center; padding: 2px; border-radius: 4px; font-weight: bold; }
         .popout-btn:hover { color: #4E79A7; background: #2a2a4e; }
+
+        #sidebar-toggle-btn {
+            position: absolute;
+            top: 14px;
+            right: 14px;
+            background: #1a1a2e;
+            border: 1px solid #3a3a5e;
+            color: #e0e0e0;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            z-index: 100;
+            transition: all 0.2s ease;
+            user-select: none;
+        }
+        #sidebar-toggle-btn:hover {
+            background: #252547;
+            border-color: #4E79A7;
+            color: #fff;
+        }
+
+        #sidebar > div {
+            flex-shrink: 0 !important;
+        }
+        .sidebar-section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 14px;
+            background: #1a1a2e;
+            border-bottom: 1px solid #2a2a4e;
+            cursor: pointer;
+            user-select: none;
+        }
+        .sidebar-section-header h3 {
+            font-size: 11.5px !important;
+            color: #a0aec0 !important;
+            margin: 0 !important;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+        .sidebar-section-header:hover {
+            background: #252547;
+        }
+        .sidebar-section-header:hover h3 {
+            color: #e2e8f0 !important;
+        }
+        .sidebar-section-content {
+            border-bottom: 1px solid #2a2a4e;
+        }
+        .section-arrow {
+            font-size: 9px;
+            color: #718096;
+            transition: transform 0.2s ease;
+        }
+        .section-collapsed .section-arrow {
+            transform: rotate(-90deg);
+        }
+        .section-collapsed .sidebar-section-content {
+            display: none !important;
+        }
     </style>
     </head>
     <body>
-    <div id="loading-overlay">
-        <div class="spinner"></div>
-        <div style="font-size: 14px; font-weight: bold; letter-spacing: 1px;">CALCULATING TOPOGRAPHY</div>
-        <div style="font-size: 11px; color: #aaa; margin-top: 8px;">Applying physics parameters...</div>
-    </div>
-    
     <div id="canvas-container">
+        <div id="loading-overlay">
+            <div class="spinner"></div>
+            <div style="font-size: 14px; font-weight: bold; letter-spacing: 1px;">CALCULATING TOPOGRAPHY</div>
+            <div style="font-size: 11px; color: #aaa; margin-top: 8px;">Applying physics parameters...</div>
+        </div>
+        <button id="sidebar-toggle-btn">Hide Panel ➔</button>
         <div id="graph"></div>
         <div id="graph-3d"></div>
     </div>
@@ -129,27 +223,53 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
             <div id="search-results"></div>
         </div>
         
-        <div id="info-panel">
-        <h3>Node Info</h3>
-        <div id="info-content"><span class="empty">Click a node to inspect it</span></div>
+        <!-- Section 2: Node Info -->
+        <div id="info-section">
+            <div class="sidebar-section-header" onclick="toggleSection('info-section', 'info-content')">
+                <h3>Node Info</h3>
+                <span class="section-arrow">▼</span>
+            </div>
+            <div id="info-content" class="sidebar-section-content" style="padding: 14px; min-height: 120px;">
+                <div id="info-content-inner"><span class="empty">Click a node to inspect it</span></div>
+            </div>
         </div>
         
-        <div id="node-chat-wrap">
-            <div class="chat-header-container">
-                <h3 style="font-size: 13px; color: #aaa; text-transform: uppercase;">Ask this Node</h3>
-                <button id="chat-popout-toggle" class="popout-btn" title="Toggle Pop-out Mode">⤢</button>
+        <!-- Section 3 Placeholder when popped out -->
+        <div id="node-chat-placeholder" style="display: none; flex-direction: column;">
+            <div class="sidebar-section-header" onclick="restorePopoutDefault()" style="cursor: pointer; display: flex; justify-content: space-between; align-items: center;">
+                <h3>Ask this Node (Popped Out)</h3>
+                <span style="font-size: 11px; color: #4E79A7; text-decoration: underline; font-weight: bold;">Recenter Card</span>
             </div>
-            <div id="node-chat-pending-warning" style="display: none; font-size: 11px; color: #BAB0AC; font-style: italic; margin-bottom: 4px;"></div>
-            <div id="node-chat-history" style="max-height: 150px; overflow-y: auto; font-size: 12px; color: #ccc; display: flex; flex-direction: column; gap: 6px;"></div>
-            <input id="node-chat-input" type="text" placeholder="e.g. What does this function do?" autocomplete="off" style="width: 100%; background: #0f0f1a; border: 1px solid #3a3a5e; color: #e0e0e0; padding: 7px 10px; border-radius: 6px; font-size: 12px; outline: none;">
+        </div>
+        
+        <!-- Section 3: Ask this Node -->
+        <div id="node-chat-section" style="display: none; flex-direction: column;">
+            <div class="sidebar-section-header" onclick="toggleSection('node-chat-section', 'node-chat-content')">
+                <h3>Ask this Node</h3>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <button id="chat-popout-toggle" class="popout-btn" title="Toggle Pop-out Mode" onclick="event.stopPropagation();">⤢</button>
+                    <span class="section-arrow">▼</span>
+                </div>
+            </div>
+            <div id="node-chat-content" class="sidebar-section-content" style="padding: 14px; display: flex; flex-direction: column; gap: 8px; background: #1a1a2e; transition: all 0.2s ease;">
+                <div id="node-chat-pending-warning" style="display: none; font-size: 11px; color: #BAB0AC; font-style: italic; margin-bottom: 4px;"></div>
+                <div id="node-chat-history" style="max-height: 150px; overflow-y: auto; font-size: 12px; color: #ccc; display: flex; flex-direction: column; gap: 6px;"></div>
+                <input id="node-chat-input" type="text" placeholder="e.g. What does this function do?" autocomplete="off" style="width: 100%; background: #0f0f1a; border: 1px solid #3a3a5e; color: #e0e0e0; padding: 7px 10px; border-radius: 6px; font-size: 12px; outline: none;">
+            </div>
         </div>
 
-        <div id="legend-wrap">
-        <h3>Communities</h3>
-        <div id="legend-controls">
-            <label><input type="checkbox" id="select-all-cb" checked onchange="toggleAllCommunities(!this.checked)">Select All</label>
-        </div>
-        <div id="legend"></div>
+        <!-- Section 4: Communities -->
+        <div id="legend-section">
+            <div class="sidebar-section-header" onclick="toggleSection('legend-section', 'legend-content')">
+                <h3>Communities</h3>
+                <span class="section-arrow">▼</span>
+            </div>
+            <div id="legend-content" class="sidebar-section-content" style="padding: 12px;">
+                <div id="legend-controls">
+                    <label><input type="checkbox" id="select-all-cb" checked onchange="toggleAllCommunities(!this.checked)">Select All</label>
+                </div>
+                <div id="legend"></div>
+            </div>
         </div>
         <div id="stats-footer" style="padding: 12px; border-top: 1px solid #2a2a4e; font-size: 11.5px; color: #a0aec0; text-align: center; background: #141424; font-family: sans-serif; letter-spacing: 0.3px;">
             <span id="stats-text">0 nodes · 0 edges · 0 communities</span>
@@ -158,9 +278,9 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     <script>
     """
 
-    safe_js_nodes = js_nodes.replace("</", r"\/")
-    safe_js_edges = js_edges.replace("</", r"\/")
-    safe_js_legend = js_legend.replace("</", r"\/")
+    safe_js_nodes = js_nodes.replace("</script>", r"<\/script>")
+    safe_js_edges = js_edges.replace("</script>", r"<\/script>")
+    safe_js_legend = js_legend.replace("</script>", r"<\/script>")
 
     js_data = f"""
     const API_BASE = {json.dumps(API_BASE)};
@@ -185,11 +305,19 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
             bg = n.color.background || n.color || bg;
             bd = n.color.border || bd;
         }
+        
+        let tooltipEl = null;
+        if (n.title) {
+            tooltipEl = document.createElement('div');
+            tooltipEl.innerHTML = n.title;
+        }
+        
         return {
-            id: n.id, label: n.label, size: n.size, font: n.font, title: n.title, shape: n.shape,
+            id: n.id, label: n.label, size: n.size, font: n.font, title: tooltipEl || n.title, shape: n.shape,
             // group: n.group, 
             _community: n.community, _community_name: n.community_name, _file_type: n._file_type,
             _is_pending: n._is_pending,
+            summary: n.summary || '',
             color: n._is_pending ? { background: bg, border: '#F28E2B' } : { background: bg, border: bd },
             borderWidth: n._is_pending ? 3 : 1.5,
             shapeProperties: { borderDashes: n._is_pending ? [4, 4] : false }
@@ -273,9 +401,14 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     function deselectNode() {
         currentSelectedNode = null;
         network.unselectAll(); 
-        document.getElementById('info-content').innerHTML = '<span class="empty">Click a node to inspect it</span>';
+        const infoContent = document.getElementById('info-content');
+        if (infoContent) {
+            infoContent.innerHTML = '<div id="info-content-inner"><span class="empty">Click a node to inspect it</span></div>';
+        }
         applyIsolation();
-        chatWrap.style.display = 'none';
+        document.getElementById('node-chat-section').style.display = 'none';
+        const placeholder = document.getElementById('node-chat-placeholder');
+        if (placeholder) placeholder.style.display = 'none';
         
         const toggle3D = document.getElementById('toggle-3d-cb');
         if (toggle3D.checked && Graph3D) {
@@ -294,8 +427,9 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
 
     function init3D() {
         if (!Graph3D) {
-            const w = document.body.clientWidth - 280;
-            const h = document.body.clientHeight;
+            const containerParent = container3D.parentElement;
+            const w = containerParent ? containerParent.clientWidth : (document.body.clientWidth - 280);
+            const h = containerParent ? containerParent.clientHeight : document.body.clientHeight;
             container3D.addEventListener('contextmenu', event => event.preventDefault());
 
             Graph3D = ForceGraph3D({
@@ -318,7 +452,10 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
                 .linkCurvature(0.12)
                 .linkWidth(0.6)
                 // ─────────────────────────────────────────────────────
-                .nodeLabel(node => `<div style="background:rgba(15,15,26,0.9);padding:6px 10px;border:1px solid #3a3a5e;border-radius:4px;color:#e0e0e0;font-size:12px;font-family:sans-serif;">${esc(node.name)}</div>`)
+                .nodeLabel(node => {
+                    const originalNode = RAW_NODES.find(n => String(n.id) === String(node.id));
+                    return originalNode && originalNode.title ? `<div style="background:rgba(15,15,26,0.95);padding:10px;border:1px solid #3a3a5e;border-radius:6px;max-width:300px;font-family:sans-serif;box-shadow: 0 4px 12px rgba(0,0,0,0.5);">${originalNode.title}</div>` : `<div style="background:rgba(15,15,26,0.9);padding:6px 10px;border:1px solid #3a3a5e;border-radius:4px;color:#e0e0e0;font-size:12px;font-family:sans-serif;">${esc(node.name)}</div>`;
+                })
                 .nodeColor('color')
                 .nodeVal('val')
                 .linkColor(link => link.color || '#3a3a5e')
@@ -403,6 +540,14 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
                 }));
 
             Graph3D.graphData({ nodes: nodes3D, links: links3D });
+
+            window.addEventListener('resize', () => {
+                if (Graph3D && container3D && container3D.parentElement) {
+                    const rw = container3D.parentElement.clientWidth;
+                    const rh = container3D.parentElement.clientHeight;
+                    Graph3D.width(rw).height(rh);
+                }
+            });
         }
     }
 
@@ -488,6 +633,32 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         }
     });
 
+    const sidebar = document.getElementById('sidebar');
+    const toggleBtn = document.getElementById('sidebar-toggle-btn');
+    
+    toggleBtn.addEventListener('click', () => {
+        const isHidden = sidebar.style.display === 'none';
+        if (isHidden) {
+            sidebar.style.display = 'flex';
+            toggleBtn.innerHTML = 'Hide Panel ➔';
+        } else {
+            sidebar.style.display = 'none';
+            toggleBtn.innerHTML = '⬅ Show Panel';
+        }
+        
+        // Handle 3D resize
+        if (Graph3D && container3D && container3D.parentElement) {
+            const w = container3D.parentElement.clientWidth;
+            const h = container3D.parentElement.clientHeight;
+            Graph3D.width(w).height(h);
+        }
+        // Handle 2D resize/fit
+        setTimeout(() => {
+            network.setSize('100%', '100%');
+            network.redraw();
+        }, 50);
+    });
+
     applyIsolation(); 
 
     function showInfo(nodeId) {
@@ -511,7 +682,7 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
 
         const summaryHtml = n._is_pending
             ? ''
-            : `<div class="field" style="margin-top: 10px;"><b>Summary:</b><br><span style="font-size:12px;color:#cbd5e0;line-height:1.4;display:block;margin-top:4px;white-space:pre-wrap;">${esc(n.title || 'No summary available.')}</span></div>`;
+            : `<div class="field" style="margin-top: 10px;"><b>Summary:</b><br><span style="font-size:12px;color:#cbd5e0;line-height:1.4;display:block;margin-top:4px;white-space:pre-wrap;">${esc(n.summary || 'No summary available.')}</span></div>`;
 
         document.getElementById('info-content').innerHTML = `
         ${pendingWarning}
@@ -523,10 +694,28 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         `;
     }
 
-    const chatWrap = document.getElementById('node-chat-wrap');
+    const chatSection = document.getElementById('node-chat-section');
+    const chatWrap = document.getElementById('node-chat-content');
     const chatHistory = document.getElementById('node-chat-history');
     const chatInput = document.getElementById('node-chat-input');
     const popoutToggle = document.getElementById('chat-popout-toggle');
+
+    function toggleSection(sectionId, contentId) {
+        const section = document.getElementById(sectionId);
+        const content = document.getElementById(contentId);
+        if (!section || !content) return;
+        
+        const isCollapsed = section.classList.toggle('section-collapsed');
+        if (isCollapsed) {
+            content.style.setProperty('display', 'none', 'important');
+        } else {
+            if (contentId === 'node-chat-content') {
+                content.style.display = 'flex';
+            } else {
+                content.style.display = 'block';
+            }
+        }
+    }
 
     function focusNode(nodeId) {
         const originalNode = RAW_NODES.find(n => String(n.id) === String(nodeId));
@@ -546,7 +735,15 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
             warningElement.style.display = 'none';
         }
         
+        chatSection.style.display = 'flex';
+        // Auto-expand section if collapsed
+        chatSection.classList.remove('section-collapsed');
         chatWrap.style.display = 'flex';
+        const placeholder = document.getElementById('node-chat-placeholder');
+        if (placeholder) {
+            placeholder.style.display = chatSection.classList.contains('popped-out') ? 'flex' : 'none';
+        }
+        
         if (!nodeChatHistories[nodeId]) {
             const wrapper = document.createElement('div');
             wrapper.style.display = 'flex';
@@ -612,15 +809,18 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
     let initialLeft = 0;
     let initialTop = 0;
 
-    const chatHeader = chatWrap.querySelector('.chat-header-container');
-    chatHeader.style.cursor = 'move';
+    const chatHeader = document.querySelector('#node-chat-section .sidebar-section-header');
+    if (chatHeader) {
+        chatHeader.style.cursor = 'move';
+        chatHeader.addEventListener('mousedown', onMouseDown);
+    }
 
     const onMouseMove = (e) => {
         if (!isDragging) return;
         const dx = e.clientX - dragStartX;
         const dy = e.clientY - dragStartY;
-        chatWrap.style.left = (initialLeft + dx) + 'px';
-        chatWrap.style.top = (initialTop + dy) + 'px';
+        chatSection.style.left = (initialLeft + dx) + 'px';
+        chatSection.style.top = (initialTop + dy) + 'px';
     };
 
     const onMouseUp = () => {
@@ -629,40 +829,51 @@ def get_graph_html(api_base, repo_name, target_path, js_nodes, js_edges, js_lege
         document.removeEventListener('mouseup', onMouseUp);
     };
 
-    const onMouseDown = (e) => {
-        if (!chatWrap.classList.contains('popped-out')) return;
+    function onMouseDown(e) {
+        if (!chatSection.classList.contains('popped-out')) return;
         if (e.target.closest('button') || e.target.closest('input')) return;
         
         isDragging = true;
         dragStartX = e.clientX;
         dragStartY = e.clientY;
         
-        const rect = chatWrap.getBoundingClientRect();
+        const rect = chatSection.getBoundingClientRect();
         initialLeft = rect.left;
         initialTop = rect.top;
         
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
         e.preventDefault();
+    }
+
+    window.restorePopoutDefault = function() {
+        if (chatSection) {
+            chatSection.style.left = '20px';
+            chatSection.style.top = '20px';
+            chatSection.style.display = 'flex';
+        }
     };
 
-    popoutToggle.addEventListener('click', () => {
-        const isPoppedOut = chatWrap.classList.toggle('popped-out');
-        if (isPoppedOut) {
-            document.body.appendChild(chatWrap);
-            popoutToggle.innerText = '⤡'; 
-            popoutToggle.style.transform = 'rotate(45deg)';
-            chatHeader.addEventListener('mousedown', onMouseDown);
-        } else {
-            const legendWrap = document.getElementById('legend-wrap');
-            document.getElementById('sidebar').insertBefore(chatWrap, legendWrap);
-            popoutToggle.innerText = '⤢';
-            popoutToggle.style.transform = 'none';
-            chatHeader.removeEventListener('mousedown', onMouseDown);
-            chatWrap.style.left = '';
-            chatWrap.style.top = '';
-        }
-    });
+    if (popoutToggle) {
+        popoutToggle.addEventListener('click', () => {
+            const isPoppedOut = chatSection.classList.toggle('popped-out');
+            const placeholder = document.getElementById('node-chat-placeholder');
+            if (isPoppedOut) {
+                document.body.appendChild(chatSection);
+                if (placeholder) placeholder.style.display = 'flex';
+                popoutToggle.innerText = '✖'; 
+                popoutToggle.title = 'Minimize to Sidebar';
+            } else {
+                const legendSection = document.getElementById('legend-section');
+                document.getElementById('sidebar').insertBefore(chatSection, legendSection);
+                if (placeholder) placeholder.style.display = 'none';
+                popoutToggle.innerText = '⤢';
+                popoutToggle.title = 'Toggle Pop-out Mode';
+                chatSection.style.left = '';
+                chatSection.style.top = '';
+            }
+        });
+    }
 
     chatInput.addEventListener('keypress', async function(e) {
         if (e.key === 'Enter' && chatInput.value.trim() !== '') {

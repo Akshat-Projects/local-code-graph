@@ -60,6 +60,8 @@ class ContextAssembler:
         
         for file_node in file_nodes:
             file_path = self.graph.nodes[file_node]["file_path"]
+            if file_path.lower().endswith(".md"):
+                continue
             absolute_path = os.path.join(self.target_repo_path, file_path)
             
             internal_nodes = [

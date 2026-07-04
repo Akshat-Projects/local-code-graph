@@ -186,7 +186,11 @@ async def _build_vector_indexes(librarian: Librarian, repo_name: str, update_ui_
     for node_id, data in librarian.graph.nodes(data=True):
         summary = data.get("summary", "")
         if summary and summary not in ["No summary available.", "pending"]:
-            nodes_data.append({"node_id": str(node_id), "summary": summary})
+            nodes_data.append({
+                "node_id": str(node_id), 
+                "summary": summary,
+                "api_calls": data.get("api_calls", "")
+            })
             
     if nodes_data:
         vector_store = HybridVectorStore(repo_name)
@@ -411,16 +415,26 @@ async def get_graph_visualization(
             
             if not summary or summary == "No summary available." or summary == "pending":
                 is_pending = True
-                if node_type == "file":
-                    raw_title = f"📄 Source File: {label}"
-                elif node_type == "class":
-                    raw_title = f"📦 Class: {label}"
-                else:
-                    raw_title = f"⚙️ Function: {label}"
-            else:
-                raw_title = summary
                 
-            wrapped_title = textwrap.fill(raw_title, width=60)
+            # Create rich HTML tooltip text
+            type_display = node_type.capitalize()
+            file_path = data.get("file_path", "")
+            
+            tooltip_html = f"<div style='font-weight: bold; font-size: 13px; color: #fff; margin-bottom: 4px;'>{label}</div>"
+            tooltip_html += f"<div style='font-size: 11px; color: #a0aec0; margin-bottom: 6px;'>Type: {type_display}"
+            if file_path:
+                tooltip_html += f" | File: {file_path}"
+            tooltip_html += "</div>"
+            
+            tooltip_html += "<hr style='border: 0; border-top: 1px solid #4A5568; margin: 6px 0;'>"
+            
+            if is_pending:
+                tooltip_html += "<div style='font-style: italic; color: #BAB0AC;'>⏳ LLM analysis pending for this component...</div>"
+            else:
+                # Limit summary width gracefully in HTML
+                tooltip_html += f"<div style='line-height: 1.4; color: #cbd5e0; font-size: 12px;'>{summary}</div>"
+                
+            wrapped_title = tooltip_html
             
             # --- USE ALGORITHMIC LEIDEN COMMUNITIES ---
             if hierarchy_level == "micro":
@@ -432,7 +446,7 @@ async def get_graph_visualization(
                 "id": str(node_id),
                 "label": label,
                 "title": wrapped_title,
-                "summary": wrapped_title,
+                "summary": summary,
                 "type": node_type,  
                 "shape": shape,
                 "size": size,

@@ -255,14 +255,18 @@ async def get_graph_status(repo_name: str, target_path: str | None = None):
         pending_details = []
         
         for node_id, data in G.nodes(data=True):
+            node_type = data.get("type", "unknown")
+            if node_type in ["library", "infrastructure"]:
+                continue
+                
             summary = data.get("summary", "").strip()
             summary = re.sub(r"<[^>]+>", "", summary).strip()
             
-            if not summary or summary == "No summary available.":
+            if not summary or summary == "No summary available." or summary == "pending":
                 pending_summaries += 1
                 pending_details.append({
                     "id": node_id,
-                    "type": data.get("type", "unknown")
+                    "type": node_type
                 })
                 
         return {
