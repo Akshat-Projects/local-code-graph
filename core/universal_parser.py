@@ -133,7 +133,8 @@ LANGUAGE_CONFIG = {
     ".txt": {"type": "config"},
     ".json": {"type": "config"},
     ".yaml": {"type": "config"},
-    ".yml": {"type": "config"}
+    ".yml": {"type": "config"},
+    ".md": {"type": "markdown"}
 }
 
 # 3. Define S-Expression Queries per Language
@@ -357,6 +358,10 @@ class UniversalParser:
         file_ext = Path(absolute_path).suffix.lower()
         filename = Path(absolute_path).name.lower()
 
+        if file_ext == ".md":
+            self._parse_markdown_file(absolute_path, relative_path, file_hash)
+            return
+
         target_configs = [
             "package.json", "requirements.txt",
             "docker-compose.yml", "docker-compose.yaml", "pyproject.toml"
@@ -461,6 +466,22 @@ class UniversalParser:
                 registered_ranges[class_id] = (body_node.start_byte, body_node.end_byte)
 
             elif capture_name == "function":
+                # Skip nested/inner functions to prevent graph noise and LLM omission warnings.
+                # The captured `node` is the name identifier, so its parent is the function definition node.
+                # We start checking parent scopes from `node.parent.parent`.
+                curr = node.parent.parent if node.parent else None
+                is_nested_func = False
+                while curr is not None:
+                    if curr.type in [
+                        "function_definition", "function_declaration", "method_definition",
+                        "function_item", "method_declaration", "method", "arrow_function"
+                    ]:
+                        is_nested_func = True
+                        break
+                    curr = curr.parent
+                if is_nested_func:
+                    continue
+
                 parent_class_id = None
                 for cls_name, cls_data in classes.items():
                     if self._is_descendant(node, cls_data["ts_node"]):
@@ -710,3 +731,121 @@ class UniversalParser:
                         exists = True
             if not exists:
                 self.graph.add_edge(file_id, func_node_id, relation="contains", confidence="EXTRACTED", confidence_score=1.0)
+
+    def _parse_markdown_file(self, absolute_path: str, relative_path: str, file_hash: str):
+        # 1. Register/Clear file node
+        self.clear_file_nodes(relative_path)
+        file_node_id = self._register_file_node(relative_path, file_hash)
+        self.graph.nodes[file_node_id]["summary"] = "Markdown Documentation file."
+        self.graph.nodes[file_node_id]["_is_pending"] = False
+        self.graph.nodes[file_node_id]["analysis_status"] = "complete"
+        
+        try:
+            with open(absolute_path, "r", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except Exception as e:
+            logger.error(f"Failed to read markdown file {relative_path}: {e}")
+            return
+
+        # 2. Extract all headings with their levels and names
+        headings = []
+        for idx, line in enumerate(lines):
+            line_num = idx + 1
+            stripped = line.strip()
+            # We want level 1, 2, 3
+            if stripped.startswith("#"):
+                # Count consecutive '#'
+                hashes = re.match(r"^(#+)\s+(.*)$", stripped)
+                if hashes:
+                    level = len(hashes.group(1))
+                    if 1 <= level <= 3:
+                        name = hashes.group(2).strip()
+                        headings.append({
+                            "level": level,
+                            "line_start": line_num,
+                            "name": name
+                        })
+
+        if not headings:
+            return
+
+        # 3. Compute line_end for each heading (stops at the next heading of any level)
+        num_headings = len(headings)
+        for i in range(num_headings):
+            if i + 1 < num_headings:
+                headings[i]["line_end"] = headings[i + 1]["line_start"] - 1
+            else:
+                headings[i]["line_end"] = len(lines)
+
+        # 4. Register headings in graph with appropriate parenting and summary text
+        active_h = {1: None, 2: None, 3: None}
+        
+        for h in headings:
+            level = h["level"]
+            name = h["name"]
+            start = h["line_start"]
+            end = h["line_end"]
+            
+            # Content of the heading's section
+            section_lines = lines[start - 1:end]
+            section_text = "\n".join(section_lines).strip()
+            
+            # Sliced content if very large
+            if len(section_text) > 1000:
+                summary_text = section_text[:1000] + "\n\n... [Content truncated due to size]"
+            else:
+                summary_text = section_text
+            
+            if level == 1:
+                node_id = f"{relative_path}::{name}"
+                # Parent is file_node_id
+                self._register_class(node_id, name, relative_path, file_node_id, start, end)
+                self.graph.nodes[node_id]["summary"] = summary_text
+                self.graph.nodes[node_id]["analysis_status"] = "complete"
+                
+                active_h[1] = node_id
+                active_h[2] = None
+                active_h[3] = None
+                
+            elif level == 2:
+                # If there's an active H1, H2 comes under it
+                if active_h[1]:
+                    node_id = f"{active_h[1]}::{name}"
+                    parent_id = active_h[1]
+                else:
+                    node_id = f"{relative_path}::{name}"
+                    parent_id = file_node_id
+                
+                # H2 is type="class"
+                self._register_class(node_id, name, relative_path, file_node_id, start, end)
+                self.graph.nodes[node_id]["summary"] = summary_text
+                self.graph.nodes[node_id]["analysis_status"] = "complete"
+                
+                # If parent is not file_node_id, also link the H1 to the H2 class!
+                if parent_id != file_node_id:
+                    if not self.graph.has_edge(parent_id, node_id):
+                        self.graph.add_edge(parent_id, node_id, relation="contains", confidence="EXTRACTED", confidence_score=1.0)
+                
+                active_h[2] = node_id
+                active_h[3] = None
+                
+            elif level == 3:
+                # H3 comes under H2 (if active) or H1 (if active) or file
+                if active_h[2]:
+                    node_id = f"{active_h[2]}::{name}"
+                    parent_id = active_h[2]
+                elif active_h[1]:
+                    node_id = f"{active_h[1]}::{name}"
+                    parent_id = active_h[1]
+                else:
+                    node_id = f"{relative_path}::{name}"
+                    parent_id = file_node_id
+                
+                is_class_parent = parent_id != file_node_id
+                parent_class_id = parent_id if is_class_parent else None
+                
+                self._register_function(node_id, name, relative_path, file_node_id, parent_class_id, start, end)
+                self.graph.nodes[node_id]["summary"] = summary_text
+                self.graph.nodes[node_id]["analysis_status"] = "complete"
+                
+                active_h[3] = node_id

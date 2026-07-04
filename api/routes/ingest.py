@@ -20,7 +20,7 @@ from core.universal_parser import UniversalParser
 from core.vector_operations import HybridVectorStore
 from models.request import IngestRequest, JobStatusResponse
 from intelligence_layer.analyst import GraphAnalyst
-from utils.helper import validate_ingestion_path
+from utils.helper import validate_ingestion_path, log_ingestion_stats
 from utils.global_cache import load_graph_cached
 from utils.constants import SecurityConstraints
 from utils.helper import get_ignore_spec
@@ -186,7 +186,11 @@ async def _build_vector_indexes(librarian: Librarian, repo_name: str, update_ui_
     for node_id, data in librarian.graph.nodes(data=True):
         summary = data.get("summary", "")
         if summary and summary not in ["No summary available.", "pending"]:
-            nodes_data.append({"node_id": str(node_id), "summary": summary})
+            nodes_data.append({
+                "node_id": str(node_id), 
+                "summary": summary,
+                "api_calls": data.get("api_calls", "")
+            })
             
     if nodes_data:
         vector_store = HybridVectorStore(repo_name)
@@ -204,13 +208,18 @@ async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str
     target_dir = Path(target_path)
     ignore_spec = get_ignore_spec(target_dir)
     
+    import time
+    t_start = time.perf_counter()
+    
     try:
         # 1. Gather all files in scope
         valid_files = _gather_valid_files(target_dir, ignore_spec)
         
-        # 2. Phase 1: Static AST Parsing
+        # 2. Phase 1: Static AST Parsing (Graph extraction)
+        t_ast_start = time.perf_counter()
         librarian = Librarian(workspace_root=".", repo_name=repo_name)
         modified_files = await asyncio.to_thread(_execute_ast_parsing, librarian, target_path, valid_files)
+        duration_ast = time.perf_counter() - t_ast_start
         
         # --- UI CONNECTION: The Streamlit Progress Callback ---
         def update_ui_progress(current: int, total: int, status_message: str):
@@ -221,14 +230,19 @@ async def run_ingestion_pipeline(req: IngestRequest, job_id: str, repo_name: str
                 "current_file": status_message
             }
             
-        # 3. Phase 2: LLM semantic parsing
+        # 3. Phase 2: LLM semantic parsing (LLM)
+        t_llm_start = time.perf_counter()
         await _execute_llm_analysis(req, librarian, target_path, modified_files, job_id, update_ui_progress)
+        duration_llm = time.perf_counter() - t_llm_start
         
-        # 4. Phase 3: Community topological calculations
+        # 4. Phase 3 & 4: Everything else (Community detection + Vector indexing)
+        t_else_start = time.perf_counter()
         await _calculate_topography(librarian, update_ui_progress)
-        
-        # 5. Phase 4: Vector index builds
         await _build_vector_indexes(librarian, repo_name, update_ui_progress)
+        duration_else = (time.perf_counter() - t_else_start) + (t_ast_start - t_start)
+        
+        # Log stats directly to standard application logs
+        log_ingestion_stats(repo_name, duration_ast, duration_llm, duration_else)
         
         # Ingestion Success status
         JOB_STORE[job_id] = {
@@ -401,16 +415,26 @@ async def get_graph_visualization(
             
             if not summary or summary == "No summary available." or summary == "pending":
                 is_pending = True
-                if node_type == "file":
-                    raw_title = f"📄 Source File: {label}"
-                elif node_type == "class":
-                    raw_title = f"📦 Class: {label}"
-                else:
-                    raw_title = f"⚙️ Function: {label}"
-            else:
-                raw_title = summary
                 
-            wrapped_title = textwrap.fill(raw_title, width=60)
+            # Create rich HTML tooltip text
+            type_display = node_type.capitalize()
+            file_path = data.get("file_path", "")
+            
+            tooltip_html = f"<div style='font-weight: bold; font-size: 13px; color: #fff; margin-bottom: 4px;'>{label}</div>"
+            tooltip_html += f"<div style='font-size: 11px; color: #a0aec0; margin-bottom: 6px;'>Type: {type_display}"
+            if file_path:
+                tooltip_html += f" | File: {file_path}"
+            tooltip_html += "</div>"
+            
+            tooltip_html += "<hr style='border: 0; border-top: 1px solid #4A5568; margin: 6px 0;'>"
+            
+            if is_pending:
+                tooltip_html += "<div style='font-style: italic; color: #BAB0AC;'>⏳ LLM analysis pending for this component...</div>"
+            else:
+                # Limit summary width gracefully in HTML
+                tooltip_html += f"<div style='line-height: 1.4; color: #cbd5e0; font-size: 12px;'>{summary}</div>"
+                
+            wrapped_title = tooltip_html
             
             # --- USE ALGORITHMIC LEIDEN COMMUNITIES ---
             if hierarchy_level == "micro":
@@ -422,7 +446,7 @@ async def get_graph_visualization(
                 "id": str(node_id),
                 "label": label,
                 "title": wrapped_title,
-                "summary": wrapped_title,
+                "summary": summary,
                 "type": node_type,  
                 "shape": shape,
                 "size": size,

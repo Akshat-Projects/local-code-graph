@@ -173,3 +173,24 @@ def secure_path_join(base_path: str | Path, relative_path: str) -> Path:
             detail="Access denied: Path traversal attempt detected"
         )
     return target_path
+
+
+def log_ingestion_stats(repo_name: str, duration_ast: float, duration_llm: float, duration_else: float):
+    """
+    Logs ingestion performance statistics directly to standard application logs.
+    """
+    def format_time(seconds: float) -> str:
+        if seconds >= 60:
+            return f"{seconds / 60:.2f} min"
+        return f"{seconds:.2f} s"
+        
+    total_time = duration_ast + duration_llm + duration_else
+    stats_message = (
+        f"\n--- Ingestion Stats for '{repo_name}' ---\n"
+        f"Graph extraction      {format_time(duration_ast)}\n"
+        f"LLM                   {format_time(duration_llm)}\n"
+        f"Everything else       {format_time(duration_else)}\n"
+        f"Total time            {format_time(total_time)}"
+    )
+    logger.info(stats_message)
+

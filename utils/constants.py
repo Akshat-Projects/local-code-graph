@@ -26,7 +26,7 @@ class AllowedTypes():
     ".py", ".ipynb", ".js", ".jsx", ".ts", ".tsx", ".html", ".css",
     ".java", ".rs", ".go", ".php", ".c", ".h", ".cpp", ".hpp", 
     ".cs", ".rb", ".swift", ".kt", ".r", ".sql", ".json", ".yaml",
-    ".yml", '.txt', '.toml'
+    ".yml", '.txt', '.toml', '.md'
     }
 
     STOP_WORDS = {

@@ -225,9 +225,19 @@ async def chat_with_node(repo_name: str, req: NodeChatRequest):
 
 
 @router.get("/status/{repo_name}")
-async def get_graph_status(repo_name: str):
+async def get_graph_status(repo_name: str, target_path: str | None = None):
     """Unified endpoint to calculate graph health and pending summaries."""
-    temp_librarian = Librarian(workspace_root=".", repo_name=repo_name)
+    workspace_root = "."
+    if target_path:
+        try:
+            target_dir = validate_ingestion_path(target_path)
+            potential_path = target_dir / ".localgraph" / "storage" / repo_name / "graph.graphml"
+            if potential_path.exists():
+                workspace_root = str(target_dir)
+        except Exception as e:
+            logger.warning(f"Failed to validate target_path for status check: {e}")
+            
+    temp_librarian = Librarian(workspace_root=workspace_root, repo_name=repo_name)
     graph_path = Path(temp_librarian.graph_path)
     
     if not graph_path.exists():
@@ -242,18 +252,28 @@ async def get_graph_status(repo_name: str):
         G = await load_graph_cached(graph_path)
         total_nodes = len(G.nodes)
         pending_summaries = 0
+        pending_details = []
         
-        for _, data in G.nodes(data=True):
+        for node_id, data in G.nodes(data=True):
+            node_type = data.get("type", "unknown")
+            if node_type in ["library", "infrastructure"]:
+                continue
+                
             summary = data.get("summary", "").strip()
             summary = re.sub(r"<[^>]+>", "", summary).strip()
             
-            if not summary or summary == "No summary available.":
+            if not summary or summary == "No summary available." or summary == "pending":
                 pending_summaries += 1
+                pending_details.append({
+                    "id": node_id,
+                    "type": node_type
+                })
                 
         return {
             "exists": True,
             "total_nodes": total_nodes,
             "pending_summaries": pending_summaries,
+            "pending_details": pending_details,
             "is_complete": pending_summaries == 0
         }
     except Exception as e:
