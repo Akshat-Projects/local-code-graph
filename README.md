@@ -37,7 +37,6 @@ This project started as a local Graph-RAG (Retrieval-Augmented Generation) exper
 ## 🚀 Key Features
 
 * **100% Local Inference possible:** Powered by `llama.cpp`, `langchain` and Semantic Kernel, routing to your local GPU (optimized for models like Gemma 4 or Qwen3.5).
-* **100% Local Inference possible:** Powered by `llama.cpp`, `langchain` and Semantic Kernel, routing to your local GPU (optimized for models like Gemma 4 or Qwen3.5).
 
    *Though on changing `.env` keys, cloud models like Gemini, OpenAI, DeepSeek will also be accessible for this excluding enterprise cloud ones.*
    *Though on changing `.env` keys, cloud models like Gemini, OpenAI, DeepSeek will also be accessible for this excluding enterprise cloud ones.*
@@ -67,7 +66,7 @@ The system supports two core operation modes: **Static AST-Only (Fast, Local, Fr
 | Phase / Feature | 🪵 Without LLM (Static AST Mode) | 🧠 With LLM (Enriched Semantic Mode) |
 | :--- | :--- | :--- |
 | **Parsing Mechanism** | Local **Tree-sitter** AST extraction for classes, functions, and imports. | Local **Tree-sitter** AST extraction + semantic batch analysis. |
-| **Speed & Cost** | Sub-second execution, 100% free, runs entirely on CPU. | Concurrently batched (Semaphore limit = 5); takes seconds to minutes; requires LLM API/Local GPU inference. |
+| **Speed & Cost** | Sub-second execution, 100% free, runs entirely on CPU. | Concurrently batched (Semaphore limit = 5); takes a few seconds per node; requires LLM API/Local GPU inference. |
 | **Node Summaries** | Nodes in the graph remain unsummarized (empty/pending descriptions). | The LLM parses code modules and writes rich architectural summaries directly to nodes. |
 | **Relationship Stitching** | Maps explicit relationships: `contains` (parent file/class), `defines`, `inherits` (base classes), `depends_on` (static imports). | **Stitches implicit relationships** by reasoning over call hierarchies and data flow to add `calls` (inferred), `depends_on` (inferred), and `instantiates` (inferred) edges with confidence ratings. |
 | **Retrieval Power** | Relies on exact keyword matches, filename matching, and structural traversals. | Fully unlocks hybrid FAISS/BM25 vector search over LLM-generated semantic summaries, followed by Personalized PageRank (PPR) traversal. |
@@ -179,17 +178,10 @@ The dashboard contains an interactive graph viewer under the `🕸️ Interactiv
 
 
 * **🌌 3D Hyperspace Mode:** Check the `🌌 Enable 3D Hyperspace` toggle to render the graph in a 3D force-directed canvas. *This is a bit resource intensive, so loading can take upto 20 seconds.*
-
-![NodeChat](assets/NodeChat.gif)
-
-
-* **🌌 3D Hyperspace Mode:** Check the `🌌 Enable 3D Hyperspace` toggle to render the graph in a 3D force-directed canvas. *This is a bit resource intensive, so loading can take upto 20 seconds.*
   * **Rotate:** Left-Click & Drag.
   * **Zoom:** Scroll-Wheel.
   * **Pan:** Right-Click & Drag (or Shift + Left-Click & Drag).
   * **2D-to-3D Flyto Handoff:** Selecting a node in 2D and checking the 3D box automatically flies the 3D camera to focus directly on that element.
-
-![3Drendering](assets/3Drendering.gif)
 
 ![3Drendering](assets/3Drendering.gif)
 
@@ -254,7 +246,7 @@ To prevent prompt context window overflow (exceeding context boundaries) and red
 ## 💻 Tech Stack
 
 * **Frontend:** Streamlit, Requests, vis.js, 3D-Force-Graph (WebGL)
-* **Backend:** FastAPI, Uvicorn, Semantic Kernel, NetworkX, Leiden Community Clustering, tree-sitter
+* **Backend:** FastAPI, Uvicorn, Semantic Kernel, NetworkX, Leiden Community Clustering, tree-sitter, langgraph, langchain
 * **Local Inference:** llama.cpp, Gemma 4 (Reasoning Model)
 
 ---
@@ -267,8 +259,6 @@ To prevent prompt context window overflow (exceeding context boundaries) and red
 * `llama.cpp` (`llama-server`) installed and accessible in your path.
 
 ### Unified Bootstrapping (`./start.sh`)
-
-To simplify launching the private local intelligence ecosystem, use the unified startup script:
 To simplify launching the private local intelligence ecosystem, use the unified startup script:
 
 ```bash
@@ -293,7 +283,7 @@ If you prefer starting services individually, run them in separate terminal wind
 You can also use `Multi-Token Prediction (MTP)` models for faster inference using speculative decoding. The quality of output remains almost same with upto 3-4x faster token output on relevant hardware-model combination.
 
 *`Do check `*[llm_benchmark.md](docs/llm_benchmark.md)*` for benchmark result of different models with Multi-Token Prediction (MTP)`*
-*`Do check `*[llm_benchmark.md](docs/llm_benchmark.md)*` for benchmark result of different models with Multi-Token Prediction (MTP)`*
+
    ```bash
    cd ~/llama.cpp/build
    ./bin/llama-server -m ~/llmhost/model/gemma-4-E4B-it-Q4_K_M.gguf -ngl 999 -c 131072 -fa on -ctk q4_0 -ctv q4_0 --host 0.0.0.0 --port 8080 --jinja --pooling rank
@@ -309,16 +299,6 @@ You can also use `Multi-Token Prediction (MTP)` models for faster inference usin
 
 ---
 
-## 🙏 Acknowledgments
-
-The initial spark for this project came from seeing [**graphify**](https://github.com/safishamsi/graphify) by [safishamsi](https://github.com/safishamsi) — an AI coding assistant skill for Claude Code, Codex, OpenCode, Cursor, Gemini CLI, and more. Seeing that idea — giving coding agents a structural sense of a repository — is what got me thinking about this space.
-
-**Local-Code-Graph is not a fork, a port, or a derivative of graphify.** It's an independent project, built from scratch around a different architecture and a different set of problems: a FastAPI + Streamlit service (not an editor/CLI skill as of now), a persistent NetworkX/GraphML graph store, multi-language Tree-sitter AST extraction with two-pass static call resolution, Leiden community clustering for macro/micro topology, hybrid FAISS + BM25 retrieval with Personalized PageRank subgraph expansion, and a fully local inference path via `llama.cpp`. None of graphify's code or prompts was copied — credit here is for the inspiration.
-
-If you're exploring this space, graphify is well worth a look in its own right.
-
-
----
 
 ## 🙏 Acknowledgments
 
