@@ -55,6 +55,54 @@ This project started as a local Graph-RAG (Retrieval-Augmented Generation) exper
 
 ---
 
+## ⚙️ Getting Started
+
+### Prerequisites
+* Python 3.12+
+* [uv](https://github.com/astral-sh/uv) package manager
+* `llama.cpp` (`llama-server`) installed and accessible in your path.
+
+### Unified Bootstrapping (`./start.sh`)
+To simplify launching the private local intelligence ecosystem, use the unified startup script:
+*(Linux/MacOS only, for windows, this can be deployed in WSL2)*
+```bash
+# Make the script executable
+chmod +x start.sh
+
+# Start all services
+./start.sh
+```
+
+The script boots:
+1. **Local Inference Server:** `llama-server` on port `8080` loading your GGUF model with GPU offloading and a high context limit (`131072`).
+2. **FastAPI Backend:** Runs on http://localhost:8000.
+3. **Streamlit UI:** Runs on http://localhost:8501 (if not blocked on port 8501).
+
+*Note: Pressing `Ctrl+C` triggers a shell trap that gracefully shuts down all background processes.*
+
+If you prefer starting services individually, run them in separate terminal windows:
+
+1. **Boot the LLM Engine:**
+
+You can also use `Multi-Token Prediction (MTP)` models for faster inference using speculative decoding. The quality of output remains almost same with upto 3-4x faster token output on relevant hardware-model combination.
+
+*`Do check `*[llm_benchmark.md](docs/llm_benchmark.md)*` for benchmark result of different models with Multi-Token Prediction (MTP)`*
+
+   ```bash
+   cd ~/llama.cpp/build
+   ./bin/llama-server -m ~/llmhost/model/gemma-4-E4B-it-Q4_K_M.gguf -ngl 999 -c 131072 -fa on -ctk q4_0 -ctv q4_0 --host 0.0.0.0 --port 8080 --jinja --pooling rank
+   ```
+2. **Start the Backend API:**
+   ```bash
+   uv run main.py
+   ```
+3. **Launch the Streamlit UI:**
+   ```bash
+   uv run streamlit run app.py
+   ```
+
+---
+
 ## 🔄 Deep Dive: Ingestion & Retrieval Pipelines
 
 The system supports two core operation modes: **Static AST-Only (Fast, Local, Free)** and **LLM-Enriched (Deep Semantic RAG)**.
@@ -250,53 +298,6 @@ To prevent prompt context window overflow (exceeding context boundaries) and red
 
 ---
 
-## ⚙️ Getting Started
-
-### Prerequisites
-* Python 3.12+
-* [uv](https://github.com/astral-sh/uv) package manager
-* `llama.cpp` (`llama-server`) installed and accessible in your path.
-
-### Unified Bootstrapping (`./start.sh`)
-To simplify launching the private local intelligence ecosystem, use the unified startup script:
-
-```bash
-# Make the script executable
-chmod +x start.sh
-
-# Start all services
-./start.sh
-```
-
-The script boots:
-1. **Local Inference Server:** `llama-server` on port `8080` loading your GGUF model with GPU offloading and a high context limit (`131072`).
-2. **FastAPI Backend:** Runs on http://localhost:8000.
-3. **Streamlit UI:** Runs on http://localhost:8501 (if not blocked on port 8501).
-
-*Note: Pressing `Ctrl+C` triggers a shell trap that gracefully shuts down all background processes.*
-
-If you prefer starting services individually, run them in separate terminal windows:
-
-1. **Boot the LLM Engine:**
-
-You can also use `Multi-Token Prediction (MTP)` models for faster inference using speculative decoding. The quality of output remains almost same with upto 3-4x faster token output on relevant hardware-model combination.
-
-*`Do check `*[llm_benchmark.md](docs/llm_benchmark.md)*` for benchmark result of different models with Multi-Token Prediction (MTP)`*
-
-   ```bash
-   cd ~/llama.cpp/build
-   ./bin/llama-server -m ~/llmhost/model/gemma-4-E4B-it-Q4_K_M.gguf -ngl 999 -c 131072 -fa on -ctk q4_0 -ctv q4_0 --host 0.0.0.0 --port 8080 --jinja --pooling rank
-   ```
-2. **Start the Backend API:**
-   ```bash
-   uv run main.py
-   ```
-3. **Launch the Streamlit UI:**
-   ```bash
-   uv run streamlit run app.py
-   ```
-
----
 
 ## 🙏 Acknowledgments
 
@@ -316,3 +317,4 @@ If you're exploring this space, graphify is well worth a look in its own right.
 4. Multi-modal processing for e.g. PDFs, audio files, .mds etc.
 5. Online search agent.
 6. Fine-grained, AST-level incremental caching (avoiding LLM re-summarization of unchanged functions/classes inside modified source files).
+7. MCP for exposure
