@@ -709,12 +709,34 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
                         "#FF8C00", "#1E90FF", "#C71585", "#32CD32", "#DAA520"
                     ]
                     
-                    # 1. Count communities
+                    # 1. Group nodes by community and count them, then find the main node for each community
                     community_counts = {}
+                    community_nodes = {}
                     for n in graph_data.get("nodes", []):
                         comm_id = str(n.get("group", "0"))
                         community_counts[comm_id] = community_counts.get(comm_id, 0) + 1
+                        if comm_id not in community_nodes:
+                            community_nodes[comm_id] = []
+                        community_nodes[comm_id].append(n)
+
+                    community_names = {}
+                    for comm_id, nodes_in_comm in community_nodes.items():
+                        def node_rank_key(node):
+                            # Rank nodes by size (descending), then type score (descending), then alphabetically by label
+                            nt = node.get("type", "unknown")
+                            if nt == "file":
+                                t_score = 3
+                            elif nt == "class":
+                                t_score = 2
+                            elif nt == "function":
+                                t_score = 0
+                            else:
+                                t_score = 1
+                            return (node.get("size", 10), t_score, node.get("label", ""))
                         
+                        best_node = max(nodes_in_comm, key=node_rank_key)
+                        community_names[comm_id] = best_node.get("label") or f"Community {comm_id}"
+
                     # 2. Sort communities safely and numerically (handles 0_0, 10_1, etc.)
                     def safe_community_key(item):
                         cid = str(item[0])
@@ -754,7 +776,7 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
                             "font": n.get("font"),
                             "color": {"background": color_hex, "border": color_hex}, 
                             "community": comm_id, 
-                            "community_name": f"Community {comm_id}",
+                            "community_name": community_names.get(comm_id, f"Community {comm_id}"),
                             "group": comm_id,
                             "_file_type": n.get("type", "unknown"), 
                             "_is_pending": n.get("_is_pending", False)
@@ -788,7 +810,7 @@ elif st.session_state.view_mode == "🕸️ Interactive Architecture Map":
                         vis_legend.append({
                             "cid": cid, 
                             "color": color_hex, 
-                            "label": f"Community {cid}", 
+                            "label": community_names.get(cid, f"Community {cid}"), 
                             "count": count
                         })
  

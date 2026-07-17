@@ -344,6 +344,59 @@ async def get_graph_visualization(
         nodes = []
         edges = []
         valid_node_ids = set()
+
+        # First pass to find the main node for each community based on node size and type
+        community_nodes = {}
+        for node_id, data in G.nodes(data=True):
+            node_type = data.get("type", "unknown")
+            parts = str(node_id).split("::")
+            file_group = parts[0]
+            label = parts[-1]
+            
+            # --- Config Filter Logic ---
+            is_config = False
+            if node_type == "file" and label.endswith(('.json', '.yml', '.yaml', '.txt', '.toml')):
+                is_config = True
+            elif node_type in ["library", "infrastructure"]:
+                is_config = True
+                
+            if not show_configs and is_config:
+                continue
+                
+            if hierarchy_level == "micro":
+                community_id = str(data.get("community_micro", data.get("community_macro", file_group)))
+            else:
+                community_id = str(data.get("community_macro", data.get("community", file_group)))
+                
+            degree = G.degree(node_id)
+            base_size = 10 + (degree * 1.6)
+            size = min(base_size, 40)
+            
+            if community_id not in community_nodes:
+                community_nodes[community_id] = []
+            community_nodes[community_id].append({
+                "label": label,
+                "type": node_type,
+                "size": size
+            })
+            
+        community_names = {}
+        for comm_id, nodes_in_comm in community_nodes.items():
+            def node_rank_key(node):
+                # Rank nodes by size (descending), then type score (descending), then alphabetically by label
+                nt = node.get("type", "unknown")
+                if nt == "file":
+                    t_score = 3
+                elif nt == "class":
+                    t_score = 2
+                elif nt == "function":
+                    t_score = 0
+                else:
+                    t_score = 1
+                return (node.get("size", 10), t_score, node.get("label", ""))
+            
+            best_node = max(nodes_in_comm, key=node_rank_key)
+            community_names[comm_id] = best_node.get("label") or f"Community {comm_id}"
         
         # Format Nodes
         for node_id, data in G.nodes(data=True):
@@ -453,7 +506,7 @@ async def get_graph_visualization(
                 "mass": mass,
                 "group": str(community_id), 
                 "community": str(community_id),               # Needed for the sidebar UI
-                "community_name": f"Community {community_id}",# Needed for the sidebar UI
+                "community_name": community_names.get(str(community_id), f"Community {community_id}"),# Needed for the sidebar UI
                 "_file_type": node_type,                      # Needed for the sidebar UI
                 "font": {"size": font_size, "color": font_color},
                 "_is_pending": is_pending,
